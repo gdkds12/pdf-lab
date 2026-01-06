@@ -5,19 +5,29 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install system dependencies (if needed for PyMuPDF or Postgres)
-# libpq-dev is often needed for psycopg2
+# libpq-dev is often needed for psycopg2, build-essential/gcc for compilations
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
+    libpq-dev gcc build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements verification
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip first to avoid issues
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
-COPY src/ ./src/
+COPY . .
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Run the application
+ENTRYPOINT ["python", "-m", "src.main"]
+
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app/src

@@ -18,6 +18,31 @@ def main():
     # Cloud Run Jobs often pass environment variables rather than CLI args for complex JSON, 
     # but we will support basic CLI args for testing.
     
+    args = parser.parse_args()
+    
+    try:
+        if args.phase == "1":
+            if not args.job_payload:
+                logger.error("Phase 1 requires --job-payload with JSON string")
+                sys.exit(1)
+            ingest_pipeline.run(args.job_payload)
+        
+        elif args.phase == "2":
+            logger.info("Phase 2 not implemented yet")
+            # signal_extraction.run(args.job_payload)
+            
+        elif args.phase == "3":
+            logger.info("Phase 3 not implemented yet")
+        
+        elif args.phase == "4":
+            logger.info("Phase 4 not implemented yet")
+            
+    except Exception as e:
+        logger.error(f"Job Failed: {e}", exc_info=True)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
     args, unknown = parser.parse_known_args()
     
     logger.info(f"Starting Project Thunder Worker - Phase {args.phase}")
