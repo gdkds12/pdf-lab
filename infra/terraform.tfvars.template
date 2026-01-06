@@ -1,0 +1,3 @@
+project_id = "pdf-lab-468815"
+region     = "asia-northeast3"
+bucket_name_prefix = "project-thunder"
