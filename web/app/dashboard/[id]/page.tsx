@@ -2,7 +2,7 @@ import { createClient } from "@/utils/supabase/server"
 import { redirect } from "next/navigation"
 import DashboardLayout from "./components/DashboardLayout"
 
-export default async function SubjectPage({ params }: { params: { id: string } }) {
+export default async function SubjectPage({ params }: { params: Promise<{ id: string }> }) {
   // await params for Next.js 15
   const { id } = await params
   const supabase = await createClient()
