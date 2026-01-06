@@ -23,6 +23,7 @@ class Config:
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
+    # GEMINI_CONCURRENCY is removed; we now use full parallelism based on batch count.
     
     @classmethod
     def validate(cls):

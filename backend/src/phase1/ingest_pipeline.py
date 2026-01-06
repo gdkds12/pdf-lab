@@ -9,6 +9,7 @@ from vertexai.language_models import TextEmbeddingModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import List, Dict, Any, Optional
 import uuid
+import concurrent.futures
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
@@ -32,6 +33,11 @@ class IngestPipeline:
             # Step 1: Download
             self._download_pdf()
             
+            # Security Check: File Size Limit (700MB)
+            file_size_mb = os.path.getsize(self.local_pdf_path) / (1024 * 1024)
+            if file_size_mb > 700:
+                raise ValueError(f"File size {file_size_mb:.2f}MB exceeds limit of 700MB.")
+            
             # Step 2: Router
             is_scanned = self._router_check()
             logger.info(f"Router Result: {'SCANNED' if is_scanned else 'DIGITAL'}")
@@ -44,6 +50,13 @@ class IngestPipeline:
             # Step 3: Extract Text
             pages_data = []
             if is_scanned:
+                # Security Check: Page Count Limit for Scanned PDF (2000 pages)
+                doc = fitz.open(self.local_pdf_path)
+                page_count = len(doc)
+                doc.close()
+                if page_count > 2000:
+                    raise ValueError(f"Scanned PDF has {page_count} pages, exceeding limit of 2000 pages.")
+                    
                 pages_data = self._process_scanned()
             else:
                 pages_data = self._process_digital()
@@ -127,31 +140,71 @@ class IngestPipeline:
                 doc.close()
 
     def _process_scanned(self) -> List[Dict]:
-        logger.info("Step 3B: Processing Scanned PDF (Gemini)...")
+        logger.info("Step 3B: Processing Scanned PDF (Gemini Parallel)...")
         try:
             doc = fitz.open(self.local_pdf_path)
             total_pages = len(doc)
             batch_size = Config.INGEST_BATCH_PAGES
-            all_pages_data = []
-
+            
+            # Prepare batches
+            tasks = []
             for start_page in range(0, total_pages, batch_size):
                 end_page = min(start_page + batch_size, total_pages)
-                logger.info(f"Processing batch: pages {start_page+1} to {end_page}")
                 
-                # Create sub-PDF
+                # Create sub-PDF in main thread (fast)
                 new_doc = fitz.open()
                 new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page-1)
                 pdf_bytes = new_doc.tobytes()
-                new_doc.close() # Close sub-doc
+                new_doc.close()
                 
-                # Call Gemini
-                batch_result = self._call_gemini_ocr(pdf_bytes, start_page + 1)
-                all_pages_data.extend(batch_result)
+                tasks.append({
+                    "pdf_bytes": pdf_bytes,
+                    "start_page": start_page,
+                    "end_page": end_page
+                })
+            
+            doc.close() # Close main doc early to free resource if possible, or keep it if needed.
+            
+            # Execute in Parallel
+            all_pages_data = []
+            # User requested full parallelism: Run all batches at once.
+            # Tier 1 RPM is ~4000, so 60-100 concurrent requests is safe.
+            max_workers = len(tasks)
+            logger.info(f"Starting parallel OCR with {max_workers} workers (Full Parallelism) for {len(tasks)} batches.")
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_batch = {
+                    executor.submit(self._call_gemini_ocr, t["pdf_bytes"], t["start_page"] + 1): t 
+                    for t in tasks
+                }
+                
+                # Collect results as they complete
+                results_map = {} # start_page -> list of pages
+                
+                for future in concurrent.futures.as_completed(future_to_batch):
+                    batch_info = future_to_batch[future]
+                    start_p = batch_info["start_page"]
+                    try:
+                        data = future.result()
+                        results_map[start_p] = data
+                        logger.info(f"Batch {start_p+1}-{batch_info['end_page']} completed. Got {len(data)} pages.")
+                    except Exception as exc:
+                        logger.error(f"Batch {start_p+1}-{batch_info['end_page']} generated an exception: {exc}")
+                        # Depending on policy, we might fail hard or skip. 
+                        # Failing hard is safer for data integrity.
+                        raise exc
+            
+            # Reassemble in order
+            sorted_start_pages = sorted(results_map.keys())
+            for sp in sorted_start_pages:
+                all_pages_data.extend(results_map[sp])
                 
             return all_pages_data
-        finally:
-            if 'doc' in locals():
-                doc.close()
+
+        except Exception as e:
+            logger.error(f"Scanned processing failed: {e}")
+            raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int) -> List[Dict]:
