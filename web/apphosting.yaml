@@ -1,2 +1,8 @@
 # Firebase App Hosting Configuration
-serviceAccount: pdf-lab-builder@${GCP_PROJECT}.iam.gserviceaccount.com
+serviceAccount: firebase-app-hosting-compute@pdf-lab-468815.iam.gserviceaccount.com
+
+env:
+  - variable: NEXT_PUBLIC_SUPABASE_URL
+    secret: SUPABASE_URL
+  - variable: NEXT_PUBLIC_SUPABASE_ANON_KEY
+    secret: SUPABASE_ANON_KEY
