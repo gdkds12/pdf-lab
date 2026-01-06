@@ -1,0 +1,2 @@
+# Firebase App Hosting Configuration
+serviceAccount: pdf-lab-builder@${GCP_PROJECT}.iam.gserviceaccount.com

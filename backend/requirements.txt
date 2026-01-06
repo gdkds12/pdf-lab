@@ -1,0 +1,9 @@
+google-cloud-storage
+google-cloud-aiplatform
+supabase
+tenacity
+pymupdf
+pgvector
+tiktoken
+psycopg2-binary
+pydantic
