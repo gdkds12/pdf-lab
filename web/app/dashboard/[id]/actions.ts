@@ -2,6 +2,7 @@
 
 import { createClient } from "@/utils/supabase/server"
 import { Storage } from "@google-cloud/storage"
+import { JobsClient } from "@google-cloud/run"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
@@ -58,9 +59,30 @@ export async function createSourceAndTrigger(subjectId: string, title: string, g
         throw new Error("Failed to create source record")
     }
 
-    // 2. Trigger Cloud Run Job (Optional / Future)
-    // For MVP Phase 1 Local, we just insert.
-    // In production, we would use Cloud Tasks or Pub/Sub here.
+    // 2. Trigger Cloud Run Job
+    try {
+        const runClient = new JobsClient();
+        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
+        
+        await runClient.runJob({
+            name: jobName,
+            overrides: {
+                containerOverrides: [
+                    {
+                        args: ['--phase', '1', '--job-payload', JSON.stringify({
+                            source_id: source.source_id,
+                            gcs_pdf_url: gcsPath
+                        })]
+                    }
+                ]
+            }
+        });
+        
+        console.log(`Triggered Cloud Run Job: ${jobName} for source ${source.source_id}`);
+    } catch (jobError) {
+        console.error("Failed to trigger Cloud Run Job:", jobError);
+        throw new Error("Failed to start processing job. Please try again.");
+    }
     
     // Trigger Revalidation
     revalidatePath(`/dashboard/${subjectId}`)
