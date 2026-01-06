@@ -66,7 +66,7 @@
 - Compute: Cloud Run Jobs(작업이 있을 때만 컨테이너 기동). [file:1]
 - AI Models:
   - `Gemini 2.5 Flash-Lite`: 오디오/비전 처리 및 Long Context 추론. [file:1]
-  - Vertex AI Embeddings: `text-embedding-004` (768차원). [file:1]
+  - Vertex AI Embeddings: `gemini-embedding-001` (768차원). [file:1]
 
 ---
 
@@ -216,7 +216,7 @@ ON evidence_candidates(session_id, rrf_score DESC);
 2. Visual OCR(Scanned):
    - 20페이지 단위로 sub-PDF 분할 후 Vision 모델로 전사(수식 LaTeX, 표 Markdown). [file:1]
 3. Embedding:
-   - `text-embedding-004`로 벡터화하여 `chunks.embedding (halfvec)`에 저장한다. [file:1]
+   - `gemini-embedding-001`로 벡터화하여 `chunks.embedding (halfvec)`에 저장한다. [file:1]
 
 ### Phase 2: Audio Analysis (Mapper)
 “강의를 듣고 시험 정보와 검색 의도를 추출하는 단계”다. [file:1]

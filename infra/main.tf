@@ -32,9 +32,7 @@ resource "google_storage_bucket" "assets" {
   depends_on = [google_project_service.apis]
 }
 
-# Example Cloud Run Job Definition (Placeholder)
-# Once the image is built and pushed, you can update 'image' and uncomment
-/*
+# Cloud Run Job Definition
 resource "google_cloud_run_v2_job" "default" {
   name     = "thunder-worker"
   location = var.region
@@ -53,10 +51,33 @@ resource "google_cloud_run_v2_job" "default" {
             name = "GCP_PROJECT"
             value = var.project_id
         }
+        env {
+            name = "GCP_LOCATION"
+            value = var.region
+        }
+        env {
+            name = "SUPABASE_URL"
+            value = var.supabase_url
+        }
+        env {
+            name = "SUPABASE_KEY"
+            value = var.supabase_key
+        }
+        env {
+            name = "GCS_BUCKET_NAME"
+            value = google_storage_bucket.assets.name
+        }
+        env {
+            name = "INGEST_BATCH_PAGES"
+            value = "20"
+        }
+        env {
+            name = "EMBED_BATCH_SIZE"
+            value = "8"
+        }
       }
     }
   }
 
   depends_on = [google_project_service.apis] 
 }
-*/

@@ -14,3 +14,14 @@ variable "bucket_name_prefix" {
   type        = string
   default     = "project-thunder"
 }
+
+variable "supabase_url" {
+  description = "Supabase URL"
+  type        = string
+}
+
+variable "supabase_key" {
+  description = "Supabase Service Role Key"
+  type        = string
+  sensitive   = true
+}

@@ -8,6 +8,7 @@ load_dotenv()
 class Config:
     GCP_PROJECT = os.getenv("GCP_PROJECT", "project-thunder-v3")
     GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+    GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
     
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Prefer SUPABASE_SERVICE_ROLE_KEY, fall back to SUPABASE_KEY
@@ -17,7 +18,7 @@ class Config:
     GEMINI_MODEL_NAME = "gemini-2.5-flash-lite" # As per doc
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
     VERTEX_LOCATION = "us-central1" 
-    EMBEDDING_MODEL_NAME = "text-embedding-004"
+    EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-001")
     
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))

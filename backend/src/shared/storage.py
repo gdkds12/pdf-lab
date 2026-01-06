@@ -21,4 +21,14 @@ class StorageClient:
         logger.info("Download completed.")
 
     def upload_file(self, local_path: str, gcs_uri: str):
-        pass # Implement if needed
+        """Uploads a local file to GCS."""
+        if not gcs_uri.startswith("gs://"):
+            raise ValueError("GCS URI must start with gs://")
+            
+        bucket_name, blob_name = gcs_uri[5:].split("/", 1)
+        bucket = self.client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        
+        logger.info(f"Uploading {local_path} to {gcs_uri}")
+        blob.upload_from_filename(local_path)
+        logger.info("Upload completed.")

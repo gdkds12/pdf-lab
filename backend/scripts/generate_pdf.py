@@ -15,7 +15,7 @@ def create_sample_pdf():
     page = doc.new_page()
     page.insert_text((50, 50), "2. Technical Details", fontsize=18)
     page.insert_text((50, 80), "We use Google Cloud Vertex AI for embeddings.", fontsize=12)
-    page.insert_text((50, 100), "The model used is text-embedding-004.", fontsize=12)
+    page.insert_text((50, 100), "The model used is gemini-embedding-001.", fontsize=12)
     page.insert_text((50, 140), "Supabase is used as the vector database.", fontsize=12)
 
     output_path = "sample.pdf"

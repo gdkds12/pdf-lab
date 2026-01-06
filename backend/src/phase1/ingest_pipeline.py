@@ -183,6 +183,8 @@ class IngestPipeline:
         
         try:
             text = response.text
+            logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
+            
             # Clean up potential markdown code blocks
             if text.startswith("```json"):
                 text = text[7:]
