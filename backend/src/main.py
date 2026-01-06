@@ -43,21 +43,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-    args, unknown = parser.parse_known_args()
-    
-    logger.info(f"Starting Project Thunder Worker - Phase {args.phase}")
-    
-    try:
-        if args.phase == "1":
-            ingest_pipeline.run(args.job_payload)
-        elif args.phase == "2":
-            signal_extraction.run(args.job_payload)
-        elif args.phase == "3":
-            retrieval_pipeline.run(args.job_payload)
-        elif args.phase == "4":
-            reasoning_pipeline.run(args.job_payload)
-    except Exception as e:
-        logger.error(f"Phase {args.phase} failed: {e}", exc_info=True)
+
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -15,6 +15,8 @@ class Config:
     
     # Gemini Configuration
     GEMINI_MODEL_NAME = "gemini-2.5-flash-lite" # As per doc
+    # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
+    VERTEX_LOCATION = "us-central1" 
     EMBEDDING_MODEL_NAME = "text-embedding-004"
     
     # Pipeline Settings

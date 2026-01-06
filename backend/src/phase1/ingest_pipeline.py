@@ -25,7 +25,7 @@ class IngestPipeline:
         self.supabase = get_supabase_client()
         
         # Init Vertex AI
-        vertexai.init(project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
+        vertexai.init(project=Config.GCP_PROJECT, location=Config.VERTEX_LOCATION)
         
     def run(self):
         try:
@@ -112,38 +112,46 @@ class IngestPipeline:
     def _process_digital(self) -> List[Dict]:
         logger.info("Step 3A: Processing Digital PDF...")
         pages = []
-        doc = fitz.open(self.local_pdf_path)
-        for i, page in enumerate(doc):
-            text = page.get_text()
-            # Basic cleanup if needed
-            pages.append({
-                "page_num": i + 1,
-                "text": text
-            })
-        return pages
+        try:
+            doc = fitz.open(self.local_pdf_path)
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                # Basic cleanup if needed
+                pages.append({
+                    "page_num": i + 1,
+                    "text": text
+                })
+            return pages
+        finally:
+            if 'doc' in locals():
+                doc.close()
 
     def _process_scanned(self) -> List[Dict]:
         logger.info("Step 3B: Processing Scanned PDF (Gemini)...")
-        doc = fitz.open(self.local_pdf_path)
-        total_pages = len(doc)
-        batch_size = Config.INGEST_BATCH_PAGES
-        all_pages_data = []
+        try:
+            doc = fitz.open(self.local_pdf_path)
+            total_pages = len(doc)
+            batch_size = Config.INGEST_BATCH_PAGES
+            all_pages_data = []
 
-        for start_page in range(0, total_pages, batch_size):
-            end_page = min(start_page + batch_size, total_pages)
-            logger.info(f"Processing batch: pages {start_page+1} to {end_page}")
-            
-            # Create sub-PDF
-            new_doc = fitz.open()
-            new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page-1)
-            pdf_bytes = new_doc.tobytes()
-            new_doc.close() # Close sub-doc
-            
-            # Call Gemini
-            batch_result = self._call_gemini_ocr(pdf_bytes, start_page + 1)
-            all_pages_data.extend(batch_result)
-            
-        return all_pages_data
+            for start_page in range(0, total_pages, batch_size):
+                end_page = min(start_page + batch_size, total_pages)
+                logger.info(f"Processing batch: pages {start_page+1} to {end_page}")
+                
+                # Create sub-PDF
+                new_doc = fitz.open()
+                new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page-1)
+                pdf_bytes = new_doc.tobytes()
+                new_doc.close() # Close sub-doc
+                
+                # Call Gemini
+                batch_result = self._call_gemini_ocr(pdf_bytes, start_page + 1)
+                all_pages_data.extend(batch_result)
+                
+            return all_pages_data
+        finally:
+            if 'doc' in locals():
+                doc.close()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int) -> List[Dict]:
@@ -175,6 +183,13 @@ class IngestPipeline:
         
         try:
             text = response.text
+            # Clean up potential markdown code blocks
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+            
             data = json.loads(text)
             return data.get("pages", [])
         except Exception as e:
