@@ -37,6 +37,23 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // [Fix for Auth Code Flow]
+  // 만약 URL에 code 파라미터가 있지만 /auth/callback 경로가 아니라면 (예: 루트로 리디렉션된 경우)
+  // 강제로 /auth/callback으로 보내서 인증 처리를 수행하게 함
+  if (
+    request.nextUrl.searchParams.has('code') &&
+    !request.nextUrl.pathname.startsWith('/auth/callback')
+  ) {
+    const url = request.nextUrl.clone()
+    const code = request.nextUrl.searchParams.get('code')
+    const next = request.nextUrl.searchParams.get('next') || '/dashboard'
+    
+    url.pathname = '/auth/callback'
+    // 기존 쿼리 파라미터 유지
+    
+    return NextResponse.redirect(url)
+  }
+
   if (
     !user &&
     !request.nextUrl.pathname.startsWith('/login') &&
