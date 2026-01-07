@@ -39,10 +39,16 @@ def main():
             signal_extraction.run(args.job_payload)
             
         elif args.phase == "3":
-            logger.info("Phase 3 not implemented yet")
+            if not args.job_payload:
+                logger.error("Phase 3 requires --job-payload")
+                sys.exit(1)
+            retrieval_pipeline.run(args.job_payload)
         
         elif args.phase == "4":
-            logger.info("Phase 4 not implemented yet")
+            if not args.job_payload:
+                logger.error("Phase 4 requires --job-payload")
+                sys.exit(1)
+            reasoning_pipeline.run(args.job_payload)
             
     except Exception as e:
         logger.error(f"Job Failed: {e}", exc_info=True)

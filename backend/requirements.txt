@@ -10,3 +10,4 @@ pydantic
 python-dotenv
 pydub
 google-cloud-run
+google-genai
