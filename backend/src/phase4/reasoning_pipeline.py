@@ -14,39 +14,37 @@ from src.shared.db import get_supabase_client
 logger = logging.getLogger(__name__)
 
 class ReasoningPipeline:
-    def __init__(self, session_id: str):
-        self.session_id = session_id
+    def __init__(self, session_ids: List[str], subject_id: str, exam_window: str = "midterm"):
+        self.session_ids = session_ids
+        self.subject_id = subject_id
+        self.exam_window = exam_window
         self.supabase = get_supabase_client()
         # Initialize Google GenAI Client for Gemini 3.0 Thinking Mode
         self.client = genai.Client(vertexai=True, project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
 
     def run(self):
         try:
-            # 1. Update Session Status
-            self.supabase.table("sessions").update({"status": "reasoning"}).eq("session_id", self.session_id).execute()
+            # 1. Update Sessions Status
+            self.supabase.table("sessions").update({"status": "reasoning"}).in_("session_id", self.session_ids).execute()
 
-            # 2. Load Data
-            session_meta = self._fetch_session_meta()
-            signals = self._fetch_signals()
-            evidence_candidates = self._fetch_evidence_candidates()
+            # 2. Load Data (Aggregated)
+            subject_meta = self._fetch_subject_meta()
+            signals = self._fetch_signals_aggregated()
+            evidence_candidates = self._fetch_evidence_candidates_aggregated()
 
             if not signals:
-                logger.warning("No signals found, cannot reason.")
+                logger.warning("No signals found across sessions, cannot reason.")
                 self._save_empty_report()
                 return
 
             # 3. Dedup & Load Chunks
-            # Extract unique chunk_ids from candidates
             candidate_chunk_ids = list(set([c["chunk_id"] for c in evidence_candidates]))
-            # Handle empty candidates gracefully (pure audio reasoning possible?)
-            # Policy says verification is needed, but we can do our best.
-            
             chunks_map = {}
             if candidate_chunk_ids:
                 chunks_map = self._fetch_chunks(candidate_chunk_ids)
 
             # 4. Context Assembly
-            prompt_context = self._assemble_context(session_meta, signals, evidence_candidates, chunks_map)
+            prompt_context = self._assemble_context(subject_meta, signals, evidence_candidates, chunks_map)
             
             # 5. Model Call
             report_json = self._call_gemini_reasoning(prompt_context)
@@ -54,58 +52,62 @@ class ReasoningPipeline:
             # 6. Validation & Post-processing
             final_report = self._validate_and_clean_report(report_json, chunks_map)
             
-            # 7. Save Report
-            self._save_report(final_report)
+            # 7. Save Report (Virtual 'All Sessions' Report)
+            # Strategy: To make frontend queries simple, we save the SAME report to ALL participating sessions.
+            # First, clean up any existing reports for these sessions to avoid duplicates/confusion.
+            try:
+                self.supabase.table("session_reports").delete().in_("session_id", self.session_ids).execute()
+            except Exception as e:
+                logger.warning(f"Failed to clean up old reports: {e}")
+
+            # Then insert for all
+            report_items = []
+            for sid in self.session_ids:
+                report_items.append({
+                    "session_id": sid,
+                    "report_json": final_report
+                })
             
-            # 8. Complete Session
-            self.supabase.table("sessions").update({"status": "completed"}).eq("session_id", self.session_id).execute()
-            logger.info("Phase 4 Reasoning Succeeded.")
+            if report_items:
+                self.supabase.table("session_reports").insert(report_items).execute()
+            
+            # 8. Complete Sessions
+            self.supabase.table("sessions").update({"status": "completed"}).in_("session_id", self.session_ids).execute()
+            logger.info(f"Phase 4 Reasoning Succeeded for sessions: {self.session_ids}")
 
         except Exception as e:
             logger.error(f"Phase 4 Failed: {e}", exc_info=True)
-            self.supabase.table("sessions").update({"status": "failed"}).eq("session_id", self.session_id).execute()
-            # Don't re-raise to crash job if we can avoid it, but here we want job failure visibility.
+            self.supabase.table("sessions").update({"status": "failed"}).in_("session_id", self.session_ids).execute()
             raise e
 
-    def _fetch_session_meta(self) -> Dict:
-        # Need subject name etc.
-        # Join not easily supported in simple client, do two fetches or use rpc if needed.
-        # Simple fetch:
-        sess = self.supabase.table("sessions").select("*").eq("session_id", self.session_id).single().execute()
-        meta = sess.data
-        
-        # Fetch subject name
-        subj = self.supabase.table("subjects").select("name").eq("subject_id", meta["subject_id"]).single().execute()
-        meta["subject_name"] = subj.data["name"]
-        return meta
+    def _fetch_subject_meta(self) -> Dict:
+        subj = self.supabase.table("subjects").select("name").eq("subject_id", self.subject_id).single().execute()
+        return {
+            "subject_name": subj.data["name"],
+            "exam_window": self.exam_window
+        }
 
-    def _fetch_signals(self) -> List[Dict]:
-        # Order by timeline
-        # chunk_index asc, t0_sec asc
+    def _fetch_signals_aggregated(self) -> List[Dict]:
+        # Fetch signals for ALL sessions
         return self.supabase.table("signals")\
             .select("*")\
-            .eq("session_id", self.session_id)\
+            .in_("session_id", self.session_ids)\
             .order("chunk_index")\
             .order("t0_sec")\
             .execute().data
 
-    def _fetch_evidence_candidates(self) -> List[Dict]:
+    def _fetch_evidence_candidates_aggregated(self) -> List[Dict]:
         return self.supabase.table("evidence_candidates")\
             .select("*")\
-            .eq("session_id", self.session_id)\
+            .in_("session_id", self.session_ids)\
             .execute().data
 
     def _fetch_chunks(self, chunk_ids: List[str]) -> Dict[str, Dict]:
-        # Batch fetch chunks
-        # Supabase 'in' operator
         if not chunk_ids: return {}
-        
-        # If too many, split batches. Let's assume reasonable limit < 500 for now.
-        # If massive usage, need batching.
+        # Batching might be needed if really large
         res = self.supabase.table("chunks").select("*").in_("chunk_id", chunk_ids).execute()
-        
-        # Return map: chunk_id -> chunk_data
         return {c["chunk_id"]: c for c in res.data}
+
 
     def _assemble_context(self, meta: Dict, signals: List[Dict], candidates: List[Dict], chunks_map: Dict) -> str:
         # A. Session Info
@@ -248,29 +250,56 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                 
         return cleaned
 
-    def _save_report(self, report: Dict):
+    def _save_report(self, session_id: str, report: Dict):
         # Insert into session_reports
         self.supabase.table("session_reports").insert({
-            "session_id": self.session_id,
+            "session_id": session_id,
             "report_json": report
         }).execute()
 
     def _save_empty_report(self):
         empty = {"professor_mentioned": [], "likely": [], "trap_warnings": [], "note": "No signals detected"}
-        self._save_report(empty)
-        self.supabase.table("sessions").update({"status": "completed"}).eq("session_id", self.session_id).execute()
+        # Save to the last session as representative
+        self._save_report(self.session_ids[-1], empty)
+        self.supabase.table("sessions").update({"status": "completed"}).in_("session_id", self.session_ids).execute()
 
 
 def run(payload_str: str):
-    logger.info("Phase 4: Reasoning Pipeline Started")
+    logger.info("Phase 4: Reasoning Pipeline Started (Multi-Session Mode)")
     try:
         payload = json.loads(payload_str)
-        session_id = payload.get("session_id")
         
-        if not session_id:
-             raise ValueError("Missing session_id in payload")
-             
-        pipeline = ReasoningPipeline(session_id)
+        # Support both single session (legacy/fallback) and multi-session
+        session_ids = payload.get("session_ids")
+        subject_id = payload.get("subject_id")
+        exam_window = payload.get("exam_window", "midterm")
+        
+        # Legacy support
+        if not session_ids and payload.get("session_id"):
+            session_ids = [payload.get("session_id")]
+            # Fetch subject_id from session if not provided
+            # But pipeline now requires subject_id in init or fetch.
+            # Let's enforce new payload structure for safety or fetch it.
+            # Lazy fetch:
+            # We need subject_id.
+            
+        if not session_ids:
+             raise ValueError("Missing session_ids within payload")
+        
+        # If subject_id missing, fetch from first session
+        if not subject_id:
+             # Just instantiate pipeline and let it fail or improving fetching?
+             # Let's require subject_id in payload for efficiency
+             pass
+
+        if not subject_id:
+             # Fallback fetch
+             from src.shared.db import get_supabase_client
+             sb = get_supabase_client()
+             s = sb.table("sessions").select("subject_id").eq("session_id", session_ids[0]).single().execute()
+             subject_id = s.data["subject_id"]
+
+        pipeline = ReasoningPipeline(session_ids, subject_id, exam_window)
         pipeline.run()
         
     except Exception as e:

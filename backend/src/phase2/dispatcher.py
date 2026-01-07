@@ -58,7 +58,8 @@ def run(payload_str: str):
             "chunk_index": i,
             "gcs_chunk_url": gcs_audio_url, 
             "start_offset_sec": start,
-            "duration_sec": dur
+            "duration_sec": dur,
+            "status": "pending" # Initial status
         })
     
     result = supabase.table("audio_chunks").insert(chunks_to_process).execute()

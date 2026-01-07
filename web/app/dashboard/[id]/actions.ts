@@ -142,3 +142,41 @@ export async function createSessionAndTrigger(subjectId: string, title: string, 
     revalidatePath(`/dashboard/${subjectId}`)
     return { success: true }
 }
+
+export async function createReportJob(subjectId: string, sessionIds: string[]) {
+    'use server'
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) throw new Error("Unauthorized")
+    if (!sessionIds || sessionIds.length === 0) throw new Error("No sessions selected")
+
+    // 1. Trigger Cloud Run Job (Phase 4 - Aggregate Reasoning)
+    try {
+        const runClient = new JobsClient();
+        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
+        
+        await runClient.runJob({
+            name: jobName,
+            overrides: {
+                containerOverrides: [
+                    {
+                        args: ['--phase', '4', '--job-payload', JSON.stringify({
+                            subject_id: subjectId,
+                            session_ids: sessionIds,
+                            exam_window: 'midterm' // Could be passed from UI
+                        })]
+                    }
+                ]
+            }
+        });
+        
+        console.log(`Triggered Report Job for subject ${subjectId} with sessions: ${sessionIds.length}`);
+    } catch (jobError) {
+        console.error("Failed to trigger Report Job:", jobError);
+        throw new Error("Failed to start createReportJob.");
+    }
+    
+    revalidatePath(`/dashboard/${subjectId}`)
+    return { success: true }
+}

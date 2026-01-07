@@ -30,6 +30,15 @@ def process_chunk_internal(
     vertexai.init(project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
     supabase = get_supabase_client()
     
+    # 0. Update Status: Processing
+    try:
+        supabase.table("audio_chunks").update({
+            "status": "processing",
+            "error_message": None
+        }).eq("chunk_id", audio_chunk_id).execute()
+    except Exception as e:
+        logger.warning(f"Could not update status to processing: {e}")
+
     processed_gcs_uri = gcs_chunk_url
     temp_gcs_blob = None
     
@@ -40,7 +49,9 @@ def process_chunk_internal(
             if processed_gcs_uri != gcs_chunk_url:
                 temp_gcs_blob = processed_gcs_uri
         except Exception as e:
-            logger.error(f"Failed to slice audio for chunk {audio_chunk_id}: {e}")
+            msg = f"Failed to slice audio for chunk {audio_chunk_id}: {e}"
+            logger.error(msg)
+            supabase.table("audio_chunks").update({"status": "failed", "error_message": msg}).eq("chunk_id", audio_chunk_id).execute()
             raise
 
     try:
@@ -51,6 +62,19 @@ def process_chunk_internal(
             subject=subject_name,
             exam_window=exam_window
         )
+        
+        # Success if we reach here (even if no signals)
+        supabase.table("audio_chunks").update({"status": "completed"}).eq("chunk_id", audio_chunk_id).execute()
+        
+    except Exception as e:
+        msg = f"Gemini Extraction Failed: {e}"
+        logger.error(msg)
+        supabase.table("audio_chunks").update({"status": "failed", "error_message": msg}).eq("chunk_id", audio_chunk_id).execute()
+        # Clean up temp file
+        if temp_gcs_blob:
+            _delete_gcs_file(temp_gcs_blob)
+        raise
+
     finally:
         # Cleanup temp file
         if temp_gcs_blob:
