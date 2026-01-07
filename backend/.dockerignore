@@ -1,8 +1,9 @@
-venv
-__pycache__
-.env
-.git
-.gitignore
+.venv/
+venv/
+node_modules/
+__pycache__/
+.git/
 *.pyc
-scripts/
-tests/
+.env
+.DS_Store
+npm-debug.log

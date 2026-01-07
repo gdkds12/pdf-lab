@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args: ['-c', 'docker pull asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest || exit 0']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest',
+      '--cache-from', 'asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest',
+      '.'
+    ]
+images:
+  - 'asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest'

@@ -28,8 +28,8 @@ def main():
             ingest_pipeline.run(args.job_payload)
         
         elif args.phase == "2":
-            logger.info("Phase 2 not implemented yet")
-            # signal_extraction.run(args.job_payload)
+            # logger.info("Phase 2 not implemented yet")
+            signal_extraction.run(args.job_payload)
             
         elif args.phase == "3":
             logger.info("Phase 3 not implemented yet")
