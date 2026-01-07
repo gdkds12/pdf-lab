@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import uuid
+import traceback
 from typing import List, Dict, Any, Optional
 from datetime import timedelta
 from google.cloud import storage
@@ -127,10 +128,34 @@ def _slice_and_upload_audio(original_gcs_uri: str, start: float, duration: float
     
     bucket_name = original_gcs_uri.replace("gs://", "").split("/")[0]
     blob_name = "/".join(original_gcs_uri.replace("gs://", "").split("/")[1:])
-    source_blob = storage_client.bucket(bucket_name).blob(blob_name)
-    input_url = source_blob.generate_signed_url(expiration=timedelta(minutes=15))
     
-    local_output = f"/tmp/{chunk_id}.mp3"
+    bucket = storage_client.bucket(bucket_name)
+    source_blob = bucket.blob(blob_name)
+
+    # Check for service account credentials to handle signing in Cloud Run
+    import google.auth
+    from google.auth.transport import requests as google_requests
+    credentials, _ = google.auth.default()
+    
+    # In Cloud Run (Compute Engine creds), we use Access Token + Service Account Email
+    if hasattr(credentials, "service_account_email") and credentials.service_account_email:
+        request = google_requests.Request()
+        credentials.refresh(request)
+        input_url = source_blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=15),
+            service_account_email=credentials.service_account_email,
+            access_token=credentials.token
+        )
+    else:
+         input_url = source_blob.generate_signed_url(expiration=timedelta(minutes=15))
+    
+    # Determine extension from source file to allow "copy" codec (e.g. m4a -> m4a)
+    _, ext = os.path.splitext(blob_name)
+    if not ext:
+        ext = ".mp3" # Fallback
+        
+    local_output = f"/tmp/{chunk_id}{ext}"
     
     # Use -c copy for blazing fast processing (no decoding/encoding)
     # Note: -ss before -i for input seeking is fast.
@@ -139,16 +164,16 @@ def _slice_and_upload_audio(original_gcs_uri: str, start: float, duration: float
         "-ss", str(start),
         "-t", str(duration),
         "-i", input_url,
-        "-c", "copy",  # Changed from "-acodec libmp3lame" to "-c copy"
+        "-c", "copy",
         "-avoid_negative_ts", "make_zero",
         local_output
     ]
     
-    # logger.info(f"Running ffmpeg (copy): {' '.join(cmd)}")
+    logger.info(f"Running ffmpeg copy from {ext} to {ext}")
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     
     # Upload to Temp GCS
-    dest_blob_name = f"temp_chunks/{chunk_id}.mp3"
+    dest_blob_name = f"temp_chunks/{chunk_id}{ext}"
     dest_blob = storage_client.bucket(bucket_name).blob(dest_blob_name)
     dest_blob.upload_from_filename(local_output)
     
@@ -296,7 +321,20 @@ Extract signals + search intent as specified.
 """
 
     # Audio Part
-    audio_part = Part.from_uri(uri=gcs_uri, mime_type="audio/mpeg") # Assuming mp3 or similar, or generally audio/*
+    # Determine mime_type based on file extension
+    ext = os.path.splitext(gcs_uri)[1].lower()
+    mime_type = "audio/mpeg"
+    if ext == ".m4a":
+        mime_type = "audio/mp4"
+    elif ext == ".wav":
+        mime_type = "audio/wav"
+    elif ext == ".aac":
+        mime_type = "audio/aac"
+    elif ext == ".ogg":
+        mime_type = "audio/ogg"
+    
+    logger.info(f"Using mime_type {mime_type} for file {gcs_uri}")
+    audio_part = Part.from_uri(uri=gcs_uri, mime_type=mime_type)
     
     try:
         response = model.generate_content(
@@ -317,8 +355,6 @@ Extract signals + search intent as specified.
         return data.get("signals", [])
 
     except Exception as e:
-        logger.error(f"Error during Gemini generation: {e}")
-        # Log response if available
-        # if 'response' in locals():
-            # logger.error(f"Response feedback: {response.prompt_feedback}")
+        logger.error(f"Error during Gemini generation: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
         raise
