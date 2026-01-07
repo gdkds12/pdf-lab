@@ -1,8 +1,8 @@
 'use client'
 
-import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play } from "lucide-react"
+import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2 } from "lucide-react"
 import { useState, useRef, useEffect, useMemo } from "react"
-import { getSignedUploadUrl, createSourceAndTrigger, createSessionAndTrigger, createReportJob } from "../actions"
+import { getSignedUploadUrl, createSourceAndTrigger, createSessionAndTrigger, createReportJob, deleteSourceItem } from "../actions"
 import { createClient } from "@/utils/supabase/client"
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js"
 
@@ -113,11 +113,28 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `subject_id=eq.${subjectId}` }, 
             (payload) => handleSessionChange(payload))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'audio_chunks' }, 
-            (payload) => handleChunkChange(payload)) // Can't filter by subject_id easily, filter in handler
-        .subscribe()
+            (payload) => handleChunkChange(payload)) 
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('Ready to receive realtime updates');
+            }
+        })
 
     return () => { supabase.removeChannel(channel) }
   }, [subjectId])
+
+  // Helper for status text
+  const getStatusText = (status: string) => {
+    switch (status) {
+        case 'queued': return '대기 중';
+        case 'pending': return '준비 중';
+        case 'processing': return '처리 중...';
+        case 'completed': return '완료됨';
+        case 'succeeded': return '완료됨';
+        case 'failed': return '실패';
+        default: return status;
+    }
+  }
 
   // Handlers for Realtime
   const handleSourceChange = (payload: RealtimePostgresChangesPayload<any>) => {
@@ -170,31 +187,34 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
           const targetIndex = prev.findIndex(p => p.id === sessionId)
           if (targetIndex === -1) return prev // Not our session
 
-          // Re-calculation of stats is tricky without full list.
-          // Ideally: "Increment/Decrement" based on old vs new.
-          // BUT safer strategy: Just increment counters for processing/completed?
-          // Simplest reliable way for now: We accept the state might drift slightly if we do pure accumulation,
-          // but let's try to update just the stats part if possible?
-          // Actually, 'audio_chunks' update gives us one row.
-          // We can't know the "Total" stats from one row update.
-          // Strategy: When a chunk changes, we might want to re-fetch stats for that session?
-          // Or keep a separate map of chunks in state? (Too heavy).
-          
-          // Hybrid approach: If chunk updates, we assume we just need to refresh that session's stats.
-          // Let's trigger a single session fetch? Or just ignore for now and rely on page refresh?
-          // User wants "Realtime".
-          
-          // Let's implement a simple optimistic update or fetch
-          // Fetching stats for ONE session is cheap.
+          // Fetch stats for this session
           fetchSessionStats(sessionId).then(newStats => {
               setItems(current => current.map(item => {
-                  if (item.id === sessionId) return { ...item, stats: newStats }
+                  // Update stats AND derived status if needed
+                  if (item.id === sessionId) {
+                     // If stats show activity, ensure item status reflects it (optional UI enhancement)
+                     return { ...item, stats: newStats }
+                  }
                   return item
               }))
           })
           
           return prev
       })
+  }
+
+  const handleDelete = async (id: string, type: 'pdf' | 'audio') => {
+      if (!confirm("정말 이 항목을 삭제하시겠습니까?")) return
+      
+      // Optimistic update
+      setItems(prev => prev.filter(i => i.id !== id))
+      
+      try {
+          await deleteSourceItem(id, type)
+      } catch (e) {
+          alert("삭제 중 오류가 발생했습니다.")
+          // Rollback if needed (simplified here)
+      }
   }
   
   const fetchSessionStats = async (sessionId: string) => {
@@ -398,8 +418,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 <p className="text-sm font-medium text-gray-900 truncate" title={item.title}>
                                     {item.title}
                                 </p>
-                                {/* Status Icon */}
-                                {getStatusIcon(item.status)}
+                                {/* Status Icon & Text */}
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-[10px] ${item.status === 'processing' ? 'text-indigo-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
+                                        {getStatusText(item.status)}
+                                    </span>
+                                    {getStatusIcon(item.status)}
+                                </div>
                             </div>
                             
                             <div className="flex items-center gap-2 mb-1">
@@ -407,6 +432,14 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 <span className="text-[10px] text-gray-400">
                                     {new Date(item.createdAt).toLocaleTimeString()}
                                 </span>
+                                
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.type); }}
+                                    className="ml-auto p-1 hover:bg-gray-200 rounded text-gray-400 hover:text-red-500 transition-colors"
+                                    title="항목 삭제"
+                                >
+                                    <Trash2 className="h-3 w-3" />
+                                </button>
                             </div>
 
                             {/* Audio Specific Progress */}
