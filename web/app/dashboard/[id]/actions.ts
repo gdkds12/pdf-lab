@@ -111,8 +111,8 @@ export async function createSessionAndTrigger(subjectId: string, title: string, 
         throw new Error("Failed to create session record")
     }
 
-    # 3. Trigger Job Phase 2 (Splitter Mode)
-    # The splitter will handle chunk creation and dispatching worker jobs
+    // 3. Trigger Job Phase 2 (Splitter Mode)
+    // The splitter will handle chunk creation and dispatching worker jobs
     try {
         const runClient = new JobsClient();
         const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
