@@ -4,6 +4,9 @@ import math
 import subprocess
 import concurrent.futures
 import google.auth
+from google.auth import iam
+from google.auth.transport import requests as google_requests
+from google.auth.credentials import Signing, Credentials
 from typing import List, Dict, Any
 from google.cloud import storage
 from datetime import timedelta
@@ -79,6 +82,8 @@ def run(payload_str: str):
     logger.info("Phase 2 Dispatcher: All chunks processed successfully.")
 
 
+
+
 def get_audio_duration(gcs_uri: str) -> float:
     storage_client = storage.Client(project=Config.GCP_PROJECT)
     bucket_name = gcs_uri.replace("gs://", "").split("/")[0]
@@ -88,12 +93,26 @@ def get_audio_duration(gcs_uri: str) -> float:
 
     # Check for service account credentials to handle signing in Cloud Run
     credentials, _ = google.auth.default()
-    sa_email = getattr(credentials, "service_account_email", None)
-
-    if sa_email:
-        signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5), service_account_email=sa_email)
+    
+    # In Cloud Run (Compute Engine creds), we don't have a private key.
+    # We must use IAM Signer if we are using a service account without a private key file.
+    if hasattr(credentials, "service_account_email") and credentials.service_account_email:
+        # Create a request object to refresh credentials if needed
+        request = google_requests.Request()
+        credentials.refresh(request)
+        
+        # Newer versions of google-cloud-storage support IAM signing natively
+        # if access_token and service_account_email are provided.
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=5),
+            service_account_email=credentials.service_account_email,
+            access_token=credentials.token
+        )
     else:
+        # Fallback for local development where creds likely have a private key
         signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5))
+
 
     cmd = [
         "ffprobe", 
