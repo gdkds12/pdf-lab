@@ -3,6 +3,7 @@ import logging
 import math
 import subprocess
 import concurrent.futures
+import google.auth
 from typing import List, Dict, Any
 from google.cloud import storage
 from datetime import timedelta
@@ -84,7 +85,15 @@ def get_audio_duration(gcs_uri: str) -> float:
     blob_name = "/".join(gcs_uri.replace("gs://", "").split("/")[1:])
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
-    signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5))
+
+    # Check for service account credentials to handle signing in Cloud Run
+    credentials, _ = google.auth.default()
+    sa_email = getattr(credentials, "service_account_email", None)
+
+    if sa_email:
+        signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5), service_account_email=sa_email)
+    else:
+        signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5))
 
     cmd = [
         "ffprobe", 
