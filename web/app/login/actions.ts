@@ -49,6 +49,36 @@ export async function signup(formData: FormData) {
   return { message: 'Check email to continue sign in process' }
 }
 
+export async function signInWithGoogle() {
+  const supabase = await createClient()
+  
+  // Get the origin dynamically
+  const headersList = await headers();
+  const host = headersList.get('host');
+  const protocol = headersList.get('x-forwarded-proto') || 'http';
+  const origin = `${protocol}://${host}`;
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${origin}/auth/callback`,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
+  })
+
+  if (error) {
+    console.error(error)
+    return { error: error.message }
+  }
+
+  if (data.url) {
+    redirect(data.url)
+  }
+}
+
 export async function signout() {
     const supabase = await createClient()
     await supabase.auth.signOut()
