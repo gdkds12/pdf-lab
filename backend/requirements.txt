@@ -8,3 +8,5 @@ tiktoken
 psycopg2-binary
 pydantic
 python-dotenv
+pydub
+google-cloud-run

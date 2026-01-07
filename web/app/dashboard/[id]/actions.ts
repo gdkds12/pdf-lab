@@ -89,3 +89,56 @@ export async function createSourceAndTrigger(subjectId: string, title: string, g
     
     return { success: true, sourceId: source.source_id }
 }
+
+export async function createSessionAndTrigger(subjectId: string, title: string, gcsPath: string) {
+    'use server'
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) throw new Error("Unauthorized")
+
+    // 1. Insert Session
+    const { data: session, error: sessError } = await supabase.from('sessions').insert({
+        user_id: user.id,
+        subject_id: subjectId,
+        exam_window: 'midterm', // Default for test
+        gcs_audio_url: gcsPath,
+        status: 'queued'
+    }).select().single()
+
+    if (sessError) {
+        console.error("DB Session Insert Error:", sessError)
+        throw new Error("Failed to create session record")
+    }
+
+    # 3. Trigger Job Phase 2 (Splitter Mode)
+    # The splitter will handle chunk creation and dispatching worker jobs
+    try {
+        const runClient = new JobsClient();
+        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
+        
+        await runClient.runJob({
+            name: jobName,
+            overrides: {
+                containerOverrides: [
+                    {
+                        args: ['--phase', 'split', '--job-payload', JSON.stringify({
+                            session_id: session.session_id,
+                            gcs_audio_url: gcsPath,
+                            subject: title,
+                            exam_window: 'midterm'
+                        })]
+                    }
+                ]
+            }
+        });
+        
+        console.log(`Triggered Splitter Job for session ${session.session_id}`);
+    } catch (jobError) {
+        console.error("Failed to trigger Cloud Run Job:", jobError);
+        throw new Error("Failed to start processing job.");
+    }
+
+    revalidatePath(`/dashboard/${subjectId}`)
+    return { success: true }
+}

@@ -4,10 +4,9 @@ FROM python:3.10-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies (if needed for PyMuPDF or Postgres)
-# libpq-dev is often needed for psycopg2, build-essential/gcc for compilations
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc build-essential \
+    libpq-dev gcc build-essential ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements verification

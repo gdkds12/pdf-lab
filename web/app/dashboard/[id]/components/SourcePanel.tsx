@@ -2,7 +2,7 @@
 
 import { Plus, FileText, Upload, MoreVertical, FileAudio } from "lucide-react"
 import { useState, useRef } from "react"
-import { getSignedUploadUrl, createSourceAndTrigger } from "../actions"
+import { getSignedUploadUrl, createSourceAndTrigger, createSessionAndTrigger } from "../actions"
 
 export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const [sources, setSources] = useState<any[]>([]) // 나중에 DB 연동
@@ -13,8 +13,11 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
     const file = e.target.files?.[0]
     if (!file) return
 
-    if (file.type !== 'application/pdf') {
-        alert("현재 PDF 파일만 지원합니다.")
+    const isPdf = file.type === 'application/pdf';
+    const isAudio = file.type.startsWith('audio/');
+
+    if (!isPdf && !isAudio) {
+        alert("PDF 또는 오디오 파일만 지원합니다.")
         return
     }
 
@@ -41,12 +44,16 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             throw new Error("Upload failed")
         }
 
-        // 3. Register Source
-        await createSourceAndTrigger(subjectId, file.name, gcsPath)
-        
-        alert("업로드 완료! 분석이 곧 시작됩니다.")
-        // Optimistic UI update or refresh
-        setSources(prev => [...prev, { title: file.name, kind: 'textbook' }])
+        // 3. Register & Trigger
+        if (isAudio) {
+           await createSessionAndTrigger(subjectId, file.name, gcsPath)
+           alert("오디오 업로드 완료! 분석(Phase 2)이 시작됩니다.")
+           setSources(prev => [...prev, { title: file.name, kind: 'session' }])
+        } else {
+           await createSourceAndTrigger(subjectId, file.name, gcsPath)
+           alert("PDF 업로드 완료! 분석(Phase 1)이 시작됩니다.")
+           setSources(prev => [...prev, { title: file.name, kind: 'textbook' }])
+        }
 
     } catch (error) {
         console.error(error)
@@ -64,7 +71,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         ref={fileInputRef} 
         onChange={handleFileSelect} 
         className="hidden" 
-        accept="application/pdf"
+        accept="application/pdf,audio/*" 
       />
 
       <div className="flex items-center justify-between border-b border-gray-200 p-4">

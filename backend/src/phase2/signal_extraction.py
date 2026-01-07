@@ -1,73 +1,146 @@
 import json
 import logging
+import os
+import subprocess
+import uuid
 from typing import List, Dict, Any, Optional
+from datetime import timedelta
+from google.cloud import storage
+
 import vertexai
-from vertexai.generative_models import GenerativeModel, Part, SafetySetting, FinishReason
+from vertexai.generative_models import GenerativeModel, Part
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
-def run(payload_str: str):
-    logger.info("Phase 2: Audio Signal Extraction Started")
-    
-    try:
-        payload = json.loads(payload_str)
-    except json.JSONDecodeError:
-        logger.error(f"Invalid JSON payload: {payload_str}")
-        raise ValueError("Invalid JSON payload")
-
-    # Required fields in payload
-    session_id = payload.get("session_id")
-    audio_chunk_id = payload.get("audio_chunk_id")
-    gcs_chunk_url = payload.get("gcs_chunk_url") # "gs://..."
-
-    if not all([session_id, audio_chunk_id, gcs_chunk_url]):
-        logger.error(f"Missing required fields in payload: {payload}")
-        raise ValueError("Missing required fields: session_id, audio_chunk_id, gcs_chunk_url")
-
-    # Optional fields
-    subject_name = payload.get("subject", "Unknown Subject")
-    exam_window = payload.get("exam_window", "Unknown Exam")
-    # user_notes = payload.get("user_notes", "") # Optional context if available
-
-    # Initialize Supabase
-    supabase = get_supabase_client()
-
-    # Initialize Vertex AI
+def process_chunk_internal(
+    session_id: str,
+    audio_chunk_id: str,
+    gcs_chunk_url: str,
+    start_offset_sec: float,
+    duration_sec: float,
+    subject_name: str,
+    exam_window: str
+):
+    """
+    Internal function to process a single chunk.
+    Designed to be called by Dispatcher directly in a ThreadPool.
+    """
     vertexai.init(project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
+    supabase = get_supabase_client()
     
-    # 2. Gemini Reasoning
+    processed_gcs_uri = gcs_chunk_url
+    temp_gcs_blob = None
+    
+    # SLICING LOGIC
+    if duration_sec > 0:
+        try:
+            processed_gcs_uri = _slice_and_upload_audio(gcs_chunk_url, start_offset_sec, duration_sec, audio_chunk_id)
+            if processed_gcs_uri != gcs_chunk_url:
+                temp_gcs_blob = processed_gcs_uri
+        except Exception as e:
+            logger.error(f"Failed to slice audio for chunk {audio_chunk_id}: {e}")
+            raise
+
     try:
         signals = _call_gemini_extraction(
             session_id=session_id,
             audio_chunk_id=audio_chunk_id,
-            gcs_uri=gcs_chunk_url,
+            gcs_uri=processed_gcs_uri,
             subject=subject_name,
             exam_window=exam_window
         )
-    except Exception as e:
-        logger.error(f"Gemini processing failed: {e}")
-        raise
+    finally:
+        # Cleanup temp file
+        if temp_gcs_blob:
+            _delete_gcs_file(temp_gcs_blob)
 
-    # 3. DB Insert (signals table)
     if signals:
         try:
-            # Add session_id to each signal as it's required by table but might not be in Gemini schema output (only audio_chunk_id is)
             for sig in signals:
                 sig["session_id"] = session_id
-                # Ensure audio_chunk_id matches
+                # Adjust timestamps relative to original file
+                sig["t0_sec"] = sig.get("t0_sec", 0) + start_offset_sec
+                sig["t1_sec"] = sig.get("t1_sec", 0) + start_offset_sec
+                
                 if sig.get("audio_chunk_id") != audio_chunk_id:
-                    logger.warning(f"Gemini returned mismatched audio_chunk_id {sig.get('audio_chunk_id')}, correcting to {audio_chunk_id}")
                     sig["audio_chunk_id"] = audio_chunk_id
 
             data = supabase.table("signals").insert(signals).execute()
-            logger.info(f"Phase 2 processing complete. Inserted {len(data.data)} signals.")
+            logger.info(f"Chunk {audio_chunk_id}: Inserted {len(data.data)} signals.")
         except Exception as e:
-            logger.error(f"Failed to insert signals into DB: {e}")
+            logger.error(f"Failed to insert signals for chunk {audio_chunk_id}: {e}")
             raise
     else:
-        logger.info("No signals extracted from this chunk.")
+        logger.info(f"Chunk {audio_chunk_id}: No signals extracted.")
+
+
+def run(payload_str: str):
+    logger.info("Phase 2: Audio Signal Extraction Started")
+    try:
+        payload = json.loads(payload_str)
+    except json.JSONDecodeError:
+        raise ValueError("Invalid JSON payload")
+
+    # Wrapper for single execution via CLI
+    process_chunk_internal(
+        session_id=payload.get("session_id"),
+        audio_chunk_id=payload.get("audio_chunk_id"),
+        gcs_chunk_url=payload.get("gcs_chunk_url"),
+        start_offset_sec=payload.get("start_offset_sec", 0),
+        duration_sec=payload.get("duration_sec", 0),
+        subject_name=payload.get("subject", "Unknown"),
+        exam_window=payload.get("exam_window", "Unknown")
+    )
+
+
+def _slice_and_upload_audio(original_gcs_uri: str, start: float, duration: float, chunk_id: str) -> str:
+    """
+    Slices audio using ffmpeg stream copy (-c copy) for speed.
+    """
+    storage_client = storage.Client(project=Config.GCP_PROJECT)
+    
+    bucket_name = original_gcs_uri.replace("gs://", "").split("/")[0]
+    blob_name = "/".join(original_gcs_uri.replace("gs://", "").split("/")[1:])
+    source_blob = storage_client.bucket(bucket_name).blob(blob_name)
+    input_url = source_blob.generate_signed_url(expiration=timedelta(minutes=15))
+    
+    local_output = f"/tmp/{chunk_id}.mp3"
+    
+    # Use -c copy for blazing fast processing (no decoding/encoding)
+    # Note: -ss before -i for input seeking is fast.
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-t", str(duration),
+        "-i", input_url,
+        "-c", "copy",  # Changed from "-acodec libmp3lame" to "-c copy"
+        "-avoid_negative_ts", "make_zero",
+        local_output
+    ]
+    
+    # logger.info(f"Running ffmpeg (copy): {' '.join(cmd)}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    
+    # Upload to Temp GCS
+    dest_blob_name = f"temp_chunks/{chunk_id}.mp3"
+    dest_blob = storage_client.bucket(bucket_name).blob(dest_blob_name)
+    dest_blob.upload_from_filename(local_output)
+    
+    os.remove(local_output)
+    
+    return f"gs://{bucket_name}/{dest_blob_name}"
+
+def _delete_gcs_file(gcs_uri: str):
+    try:
+        storage_client = storage.Client(project=Config.GCP_PROJECT)
+        bucket_name = gcs_uri.replace("gs://", "").split("/")[0]
+        blob_name = "/".join(gcs_uri.replace("gs://", "").split("/")[1:])
+        storage_client.bucket(bucket_name).blob(blob_name).delete()
+        logger.info(f"Deleted temp file {gcs_uri}")
+    except Exception as e:
+        logger.warning(f"Failed to delete temp file {gcs_uri}: {e}")
 
 
 def _call_gemini_extraction(
