@@ -10,6 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import List, Dict, Any, Optional
 import uuid
 import concurrent.futures
+import json_repair  # Import json_repair
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
@@ -231,21 +232,18 @@ class IngestPipeline:
         
         response = model.generate_content(
             [part, prompt],
-            generation_config={"response_mime_type": "application/json"}
+            generation_config={
+                "response_mime_type": "application/json",
+                "max_output_tokens": 64000
+            }
         )
         
         try:
             text = response.text
             logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
             
-            # Clean up potential markdown code blocks
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-            
-            data = json.loads(text)
+            # Use json_repair to handle potential truncated JSON or formatting issues
+            data = json_repair.loads(text)
             return data.get("pages", [])
         except Exception as e:
             logger.error(f"Failed to parse Gemini response: {e}. Raw: {response.text[:100]}...")

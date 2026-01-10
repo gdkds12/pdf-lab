@@ -11,3 +11,4 @@ python-dotenv
 pydub
 google-cloud-run
 google-genai
+json_repair

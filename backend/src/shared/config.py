@@ -15,15 +15,17 @@ class Config:
     SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
     
     # Gemini Configuration
-    GEMINI_MODEL_NAME = "gemini-2.5-flash-lite" # As per doc
+    GEMINI_LOCATION = "us-central1"
+    GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
+    REASONING_MODEL_NAME = "gemini-3.0-flash"
+
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
     VERTEX_LOCATION = "us-central1" 
-    EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-001")
+    EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-004")
     
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
-    # GEMINI_CONCURRENCY is removed; we now use full parallelism based on batch count.
     
     @classmethod
     def validate(cls):

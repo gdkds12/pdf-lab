@@ -28,7 +28,7 @@ def process_chunk_internal(
     Internal function to process a single chunk.
     Designed to be called by Dispatcher directly in a ThreadPool.
     """
-    vertexai.init(project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
+    vertexai.init(project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
     supabase = get_supabase_client()
     
     # 0. Update Status: Processing
@@ -205,15 +205,13 @@ def _call_gemini_extraction(
 
     # Response Schema
     response_schema = {
-        "type": "object",
-        "additionalProperties": False,
+        "type": "OBJECT",
         "required": ["signals"],
         "properties": {
             "signals": {
-            "type": "array",
+            "type": "ARRAY",
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "OBJECT",
                 "required": [
                 "signal_type",
                 "content",
@@ -225,32 +223,24 @@ def _call_gemini_extraction(
                 ],
                 "properties": {
                 "signal_type": {
-                    "type": "string",
+                    "type": "STRING",
                     "enum": ["hint", "likely", "trap"]
                 },
                 "content": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 200
+                    "type": "STRING"
                 },
                 "search_queries": {
-                    "type": "array",
-                    "minItems": 2,
-                    "maxItems": 6,
+                    "type": "ARRAY",
                     "items": {
-                    "type": "string",
-                    "minLength": 2,
-                    "maxLength": 120
+                    "type": "STRING"
                     }
                 },
                 "audio_chunk_id": {
-                    "type": "string",
-                    "minLength": 8,
-                    "maxLength": 64
+                    "type": "STRING"
                 },
-                "t0_sec": { "type": "number", "minimum": 0 },
-                "t1_sec": { "type": "number", "minimum": 0 },
-                "importance": { "type": "number", "minimum": 0, "maximum": 1 }
+                "t0_sec": { "type": "NUMBER", "minimum": 0 },
+                "t1_sec": { "type": "NUMBER", "minimum": 0 },
+                "importance": { "type": "NUMBER", "minimum": 0, "maximum": 1 }
                 }
             }
             }
