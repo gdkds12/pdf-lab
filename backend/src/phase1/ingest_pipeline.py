@@ -176,7 +176,12 @@ class IngestPipeline:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks
                 future_to_batch = {
-                    executor.submit(self._call_gemini_ocr, t["pdf_bytes"], t["start_page"] + 1): t 
+                    executor.submit(
+                        self._call_gemini_ocr, 
+                        t["pdf_bytes"], 
+                        t["start_page"] + 1,
+                        t["end_page"] - t["start_page"] # expected_count
+                    ): t 
                     for t in tasks
                 }
                 
@@ -208,7 +213,7 @@ class IngestPipeline:
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int) -> List[Dict]:
+    def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
         model = GenerativeModel(Config.GEMINI_MODEL_NAME)
         
         # Prompt as per documentation
@@ -224,10 +229,10 @@ class IngestPipeline:
         3. Do NOT summarize. Transcribe exactly.
         4. Preserve tables as Markdown tables.
         5. Preserve equations as LaTeX.
-        6. Do not miss any page.
+        6. Do not miss any page. Return exactly {expected_count} pages.
         """
         
-        # Gemini 1.5/2.5 accepts PDF parts directly
+        # Gemini 2.5 accepts PDF parts directly
         part = Part.from_data(data=pdf_bytes, mime_type="application/pdf")
         
         response = model.generate_content(
@@ -244,9 +249,14 @@ class IngestPipeline:
             
             # Use json_repair to handle potential truncated JSON or formatting issues
             data = json_repair.loads(text)
-            return data.get("pages", [])
+            pages = data.get("pages", [])
+            
+            if len(pages) != expected_count:
+                raise ValueError(f"Batch incomplete: Expected {expected_count} pages, but got {len(pages)}. Retrying...")
+                
+            return pages
         except Exception as e:
-            logger.error(f"Failed to parse Gemini response: {e}. Raw: {response.text[:100]}...")
+            logger.error(f"Failed to parse Gemini response or incomplete batch: {e}. Raw: {response.text[:100]}...")
             raise
 
     def _chunk_text(self, pages_data: List[Dict]) -> List[Dict]:

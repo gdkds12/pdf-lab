@@ -69,7 +69,7 @@ resource "google_cloud_run_v2_job" "default" {
         }
         env {
             name = "INGEST_BATCH_PAGES"
-            value = "20"
+            value = "5"
         }
         env {
             name = "EMBED_BATCH_SIZE"
