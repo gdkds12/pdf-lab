@@ -22,6 +22,7 @@ type SourceItem = {
     createdAt: string
     stats?: ProcessingStats // For audio
     selected?: boolean // For checkbox
+    logs?: { ts: string, msg: string }[] // Debug logs
 }
 
 export default function SourcePanel({ subjectId }: { subjectId: string }) {
@@ -95,7 +96,8 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                 title: s.gcs_audio_url.split('/').pop() || 'Audio', // approximate title
                 status: s.status,
                 createdAt: s.created_at,
-                stats
+                stats,
+                logs: s.logs // Debug logs
             })
         })
 
@@ -167,12 +169,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
               title: newRow.gcs_audio_url.split('/').pop() || 'Audio',
               status: newRow.status,
               createdAt: newRow.created_at,
-              stats: { total: 0, pending: 0, processing: 0, completed: 0, failed: 0 }
+              stats: { total: 0, pending: 0, processing: 0, completed: 0, failed: 0 },
+              logs: newRow.logs
           }, ...prev])
       } else if (payload.eventType === 'UPDATE') {
           setItems(prev => prev.map(item => {
               if (item.id === newRow.session_id) {
-                  return { ...item, status: newRow.status }
+                  return { ...item, status: newRow.status, logs: newRow.logs }
               }
               return item
           }))
@@ -444,13 +447,33 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 </button>
                             </div>
 
-                            {/* Audio Specific Progress */}
-                            {item.type === 'audio' && item.stats && (
+                            {/* Audio Specific Progress - Show only when processing */}
+                            {item.type === 'audio' && item.stats && item.status !== 'completed' && item.status !== 'reasoning' && item.status !== 'succeeded' && (
                                 <div className="mt-2 bg-gray-50 p-2 rounded text-xs text-gray-600">
                                     <div className="flex justify-between border-b pb-1 mb-1 border-gray-200">
                                         <span>Phase 2 (Signal)</span>
                                     </div>
                                     {renderProgressBar(item.stats)}
+                                </div>
+                            )}
+
+                            {/* Reasoning Phase Logs */}
+                            {item.type === 'audio' && item.logs && item.logs.length > 0 && (
+                                <div className="mt-2 bg-slate-900 text-emerald-400 p-2.5 rounded shadow-inner text-[10px] font-mono leading-relaxed">
+                                    <div className="flex items-center justify-between border-b border-slate-700 pb-1 mb-1.5 opacity-80">
+                                        <span className="font-semibold uppercase tracking-wider text-[9px]">Phase 4 Logs</span>
+                                        <span className="text-[9px] text-slate-400">{item.status}</span>
+                                    </div>
+                                    <div className="flex flex-col gap-1 max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+                                        {[...item.logs].reverse().map((log, i) => (
+                                            <div key={i} className="break-words border-l-2 border-slate-700 pl-2">
+                                                <span className="text-slate-500 text-[9px] block mb-0.5">
+                                                    {log.ts && log.ts.includes('T') ? log.ts.split('T')[1].split('.')[0] : ''}
+                                                </span>
+                                                {log.msg}
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
                         </div>

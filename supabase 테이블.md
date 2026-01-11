@@ -80,6 +80,8 @@ create table sessions (
   status text not null default 'queued'
     check (status in ('queued','splitting','extracting','gathering','reasoning','completed','failed')),
 
+  logs jsonb default '[]', -- Debugging logs for UI
+
   created_at timestamptz not null default now()
 );
 

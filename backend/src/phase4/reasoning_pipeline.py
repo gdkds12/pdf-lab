@@ -1,6 +1,7 @@
 ﻿import logging
 import json
 import sys
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import difflib
@@ -18,38 +19,62 @@ class ReasoningPipeline:
         self.session_ids = session_ids
         self.subject_id = subject_id
         self.exam_window = exam_window
+        self.logs_buffer = []
         self.supabase = get_supabase_client()
         # Initialize Google GenAI Client for Gemini 3.0 Thinking Mode
-        self.client = genai.Client(vertexai=True, project=Config.GCP_PROJECT, location=Config.GCP_LOCATION)
+        # Use GEMINI_LOCATION (e.g. us-central1) specifically for Thinking Mode availability
+        self.client = genai.Client(vertexai=True, project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
+
+    def _log(self, message: str):
+        logger.info(message)
+        timestamp = datetime.now().isoformat()
+        entry = {"ts": timestamp, "msg": message}
+        self.logs_buffer.append(entry)
+        try:
+            # Overwrite logs column with current history
+            self.supabase.table("sessions").update({
+                "logs": self.logs_buffer
+            }).in_("session_id", self.session_ids).execute()
+        except Exception as e:
+            logger.warning(f"Failed to update logs: {e}")
 
     def run(self):
         try:
+            self._log("Starting Reasoning Phase (Phase 4)...")
             # 1. Update Sessions Status
             self.supabase.table("sessions").update({"status": "reasoning"}).in_("session_id", self.session_ids).execute()
 
             # 2. Load Data (Aggregated)
+            self._log(f"Fetching aggregation data for {len(self.session_ids)} sessions...")
             subject_meta = self._fetch_subject_meta()
             signals = self._fetch_signals_aggregated()
             evidence_candidates = self._fetch_evidence_candidates_aggregated()
 
             if not signals:
+                self._log("No signals found across sessions. Aborting.")
                 logger.warning("No signals found across sessions, cannot reason.")
                 self._save_empty_report()
                 return
+
+            self._log(f"Found {len(signals)} signals and {len(evidence_candidates)} evidence candidates.")
 
             # 3. Dedup & Load Chunks
             candidate_chunk_ids = list(set([c["chunk_id"] for c in evidence_candidates]))
             chunks_map = {}
             if candidate_chunk_ids:
                 chunks_map = self._fetch_chunks(candidate_chunk_ids)
+            
+            self._log(f"Retrieved {len(chunks_map)} unique textbook chunks for context.")
 
             # 4. Context Assembly
             prompt_context = self._assemble_context(subject_meta, signals, evidence_candidates, chunks_map)
             
             # 5. Model Call
+            self._log("Calling Gemini 3.0 Thinking Mode (this may take 30-60s)...")
             report_json = self._call_gemini_reasoning(prompt_context)
             
             # 6. Validation & Post-processing
+            self._log("Validating and cleaning generated report...")
             final_report = self._validate_and_clean_report(report_json, chunks_map)
             
             # 7. Save Report (Virtual 'All Sessions' Report)
@@ -72,6 +97,7 @@ class ReasoningPipeline:
                 self.supabase.table("session_reports").insert(report_items).execute()
             
             # 8. Complete Sessions
+            self._log("Report saved. Marking sessions as completed.")
             self.supabase.table("sessions").update({"status": "completed"}).in_("session_id", self.session_ids).execute()
             logger.info(f"Phase 4 Reasoning Succeeded for sessions: {self.session_ids}")
 
@@ -187,11 +213,11 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - Return VALID JSON only.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
-        logger.info("Calling Gemini 3.0 Flash Preview with Thinking Mode (HIGH)...")
+        logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH)...")
         
         try:
             response = self.client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model=Config.REASONING_MODEL_NAME,
                 contents=prompt_context,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
