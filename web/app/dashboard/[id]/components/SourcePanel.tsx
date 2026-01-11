@@ -130,6 +130,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         case 'pending': return '준비 중';
         case 'processing': return '처리 중...';
         case 'completed': return '완료됨';
+        case 'reasoning': return '분석 완료'; 
         case 'succeeded': return '완료됨';
         case 'failed': return '실패';
         default: return status;
@@ -298,6 +299,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const getStatusIcon = (status: string) => {
       switch (status) { // Normalize status
           case 'succeeded':
+          case 'reasoning': // Treat reasoning as completed for icon
           case 'completed': return <CheckCircle2 className="h-4 w-4 text-green-500" />
           case 'failed': return <AlertCircle className="h-4 w-4 text-red-500" />
           case 'queued': return <div className="h-2 w-2 rounded-full bg-gray-300" />

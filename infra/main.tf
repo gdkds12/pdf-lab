@@ -43,7 +43,7 @@ resource "google_cloud_run_v2_job" "default" {
         image = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.repo.name}/worker:latest"
         resources {
           limits = {
-            cpu    = "2"
+            cpu    = "4"
             memory = "4Gi"
           }
         }

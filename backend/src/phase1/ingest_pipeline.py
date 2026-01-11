@@ -73,10 +73,18 @@ class IngestPipeline:
             self._save_chunks(chunks_with_embeddings)
             
             # Mark Succeeded
-            self.supabase.table("sources").update({
+            # Explicitly log the data being sent
+            logger.info(f"Updating source {self.source_id} to succeeded status. Page count: {len(pages_data)}")
+            
+            response = self.supabase.table("sources").update({
                 "ingest_status": "succeeded",
-                "page_count": len(pages_data) # Update page count
-            }).eq("source_id", self.source_id).execute()
+                "page_count": len(pages_data)
+            }).eq("source_id", self.source_id).select().execute()
+            
+            if not response.data:
+                logger.error(f"CRITICAL: Final update returned 0 rows. Source ID {self.source_id} may be missing.")
+            else:
+                logger.info(f"Successfully updated source status: {response.data}")
             
             logger.info("Ingest Pipeline Succeeded.")
             
@@ -212,8 +220,9 @@ class IngestPipeline:
             logger.error(f"Scanned processing failed: {e}")
             raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
+        logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
         model = GenerativeModel(Config.GEMINI_MODEL_NAME)
         
         # Prompt as per documentation
@@ -235,13 +244,23 @@ class IngestPipeline:
         # Gemini 2.5 accepts PDF parts directly
         part = Part.from_data(data=pdf_bytes, mime_type="application/pdf")
         
-        response = model.generate_content(
-            [part, prompt],
-            generation_config={
-                "response_mime_type": "application/json",
-                "max_output_tokens": 64000
-            }
-        )
+        # Wrapper to enforce timeout since vertexai doesn't support it natively
+        def _generate():
+            return model.generate_content(
+                [part, prompt],
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "max_output_tokens": 64000
+                },
+                stream=False
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as request_executor:
+            future = request_executor.submit(_generate)
+            try:
+                response = future.result(timeout=40)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError(f"Gemini API call timed out after 40 seconds for batch {start_page_offset}")
         
         try:
             text = response.text
