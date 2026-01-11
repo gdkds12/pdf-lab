@@ -130,7 +130,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         case 'pending': return '준비 중';
         case 'processing': return '처리 중...';
         case 'completed': return '완료됨';
-        case 'reasoning': return '분석 완료'; 
+        case 'reasoning': return '준비 완료'; 
         case 'succeeded': return '완료됨';
         case 'failed': return '실패';
         default: return status;
@@ -343,11 +343,11 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       return (
         <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${
             item.status === 'completed' ? 'bg-blue-50 text-blue-700 ring-blue-700/10' :
-            item.status === 'reasoning' ? 'bg-purple-50 text-purple-700 ring-purple-700/10' :
+            item.status === 'reasoning' ? 'bg-green-50 text-green-700 ring-green-600/20' :
             item.status === 'failed' ? 'bg-red-50 text-red-700 ring-red-600/20' :
             'bg-gray-50 text-gray-600 ring-gray-500/10'
         }`}>
-          {item.status}
+          {item.status === 'reasoning' ? 'Ready' : item.status}
         </span>
       )
   }
