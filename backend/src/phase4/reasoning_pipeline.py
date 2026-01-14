@@ -227,6 +227,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - If a Reference Block is not relevant to any signal, ignore it.
 - Use EXACT chunk_ids from input in citations.
 - Return VALID JSON only.
+- **IMPORTANT**: Write the report entirely in KOREAN (한국어). The 'title' and 'why' fields MUST be in Korean.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
         logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH) [DEBUG: {Config.REASONING_MODEL_NAME}]")
@@ -282,9 +283,10 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                 for cit in citations:
                     cid = cit.get("chunk_id")
                     if cid and cid in chunks_map:
-                        # Append metadata to citation for frontend convenience?
-                        # Or just keep ID. Let's keep ID + add human readable info if possible.
-                        # For now, just keep validated ID
+                        # Append page metadata to citation for frontend convenience
+                        chunk = chunks_map[cid]
+                        cit["page_start"] = chunk.get("page_start")
+                        cit["page_end"] = chunk.get("page_end")
                         valid_citations.append(cit)
                 
                 item["citations"] = valid_citations

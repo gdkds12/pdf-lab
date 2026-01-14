@@ -24,7 +24,11 @@ type ReportItem = {
     title: string
     why: string
     confidence: number
-    citations: { chunk_id: string }[]
+    citations: { 
+        chunk_id: string
+        page_start?: number
+        page_end?: number
+    }[]
 }
 
 export default function ReportViewerModal({ isOpen, onClose, sessionId, title }: ReportViewerModalProps) {
@@ -191,7 +195,11 @@ function ReportCard({ item, type }: { item: ReportItem, type: 'high' | 'normal' 
                 <div className="flex flex-wrap gap-2 mt-2">
                     {item.citations.map((c, i) => (
                         <span key={i} className="inline-flex items-center text-[10px] px-2 py-1 rounded bg-white border border-gray-200 text-gray-500">
-                            Ref: {c.chunk_id.substring(0, 8)}...
+                            {c.page_start ? (
+                                <>p.{c.page_start}{c.page_end && c.page_end !== c.page_start ? `-${c.page_end}` : ''}</>
+                            ) : (
+                                <>Ref: {c.chunk_id.substring(0, 8)}...</>
+                            )}
                         </span>
                     ))}
                 </div>
