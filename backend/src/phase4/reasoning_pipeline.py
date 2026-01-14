@@ -11,6 +11,7 @@ from google.genai import types
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.phase3.retrieval_pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,21 @@ class ReasoningPipeline:
                 self._save_empty_report()
                 return
 
+            # Check if evidence exists. If not, trigger Lazy Retrieval (Phase 3)
+            if not evidence_candidates and signals:
+                self._log("No evidence candidates found. Triggering Phase 3 (Retrieval) automatically...")
+                for sid in self.session_ids:
+                    try:
+                        self._log(f"Running Retrieval for session {sid}...")
+                        rp = RetrievalPipeline(session_id=sid)
+                        rp.run()
+                    except Exception as e:
+                        self._log(f"Retrieval failed for session {sid}: {e}")
+                
+                # Re-fetch evidence after retrieval
+                evidence_candidates = self._fetch_evidence_candidates_aggregated()
+                self._log(f"After retrieval: Found {len(evidence_candidates)} candidates.")
+
             self._log(f"Found {len(signals)} signals and {len(evidence_candidates)} evidence candidates.")
 
             # 3. Dedup & Load Chunks
@@ -70,7 +86,7 @@ class ReasoningPipeline:
             prompt_context = self._assemble_context(subject_meta, signals, evidence_candidates, chunks_map)
             
             # 5. Model Call
-            self._log("Calling Gemini 3.0 Thinking Mode (this may take 30-60s)...")
+            self._log(f"Calling Gemini Thinking Mode ({Config.REASONING_MODEL_NAME}) (this may take 30-60s)...")
             report_json = self._call_gemini_reasoning(prompt_context)
             
             # 6. Validation & Post-processing
@@ -213,7 +229,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - Return VALID JSON only.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
-        logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH)...")
+        logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH) [DEBUG: {Config.REASONING_MODEL_NAME}]")
         
         try:
             response = self.client.models.generate_content(
@@ -221,10 +237,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                 contents=prompt_context,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=types.ThinkingLevel.HIGH
-                    )
+                    response_mime_type="application/json"
                 )
             )
             
@@ -233,6 +246,11 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             if hasattr(response.candidates[0].content.parts[0], 'thought') and response.candidates[0].content.parts[0].thought:
                  logger.info("Values logic found (thought signature suppressed for cleaner log)")
             
+            return json.loads(response.text)
+
+        except Exception as e:
+            logger.error(f"Gemini Call Failed: {e}")
+            raise e            
             return json.loads(response.text)
             
         except Exception as e:

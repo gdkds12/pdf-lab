@@ -1,0 +1,8 @@
+JOB_PAYLOAD: '{"user_id": "b56e5d86-7145-4de7-b49c-24984744bdbc", "session_id": "66ce7432-f942-4139-886d-44c2a4401755", "action": "reasoning", "pdf_id": "dummy"}'
+SUPABASE_URL: "https://api.thunder-ai.org"
+SUPABASE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+GCS_BUCKET_NAME: "project-thunder-assets-pdf-lab-468815"
+GCP_PROJECT: "pdf-lab-468815"
+GCP_LOCATION: "asia-northeast3"
+INGEST_BATCH_PAGES: "5"
+EMBED_BATCH_SIZE: "8"

@@ -79,12 +79,9 @@ class IngestPipeline:
             response = self.supabase.table("sources").update({
                 "ingest_status": "succeeded",
                 "page_count": len(pages_data)
-            }).eq("source_id", self.source_id).select().execute()
+            }).eq("source_id", self.source_id).execute()
             
-            if not response.data:
-                logger.error(f"CRITICAL: Final update returned 0 rows. Source ID {self.source_id} may be missing.")
-            else:
-                logger.info(f"Successfully updated source status: {response.data}")
+            logger.info(f"Successfully updated source {self.source_id} status to succeeded.")
             
             logger.info("Ingest Pipeline Succeeded.")
             

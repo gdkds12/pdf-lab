@@ -17,7 +17,9 @@ class Config:
     # Gemini Configuration
     GEMINI_LOCATION = "us-central1"
     GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
-    REASONING_MODEL_NAME = "gemini-3.0-flash"
+    # FORCE UPDATE TIMESTAMP 2026-01-14 16:30
+    # Falling back to known valid Thinking Model
+    REASONING_MODEL_NAME = "gemini-2.5-flash-lite"
 
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
     VERTEX_LOCATION = "us-central1" 

@@ -1,10 +1,11 @@
 'use client'
 
-import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2 } from "lucide-react"
+import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2, BookOpenCheck } from "lucide-react"
 import { useState, useRef, useEffect, useMemo } from "react"
 import { getSignedUploadUrl, createSourceAndTrigger, createSessionAndTrigger, createReportJob, deleteSourceItem } from "../actions"
 import { createClient } from "@/utils/supabase/client"
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js"
+import ReportViewerModal from "./ReportViewerModal"
 
 type ProcessingStats = {
     total: number
@@ -29,6 +30,8 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const [items, setItems] = useState<SourceItem[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [viewingReportSessionId, setViewingReportSessionId] = useState<string | null>(null)
+  
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   const supabase = createClient()
@@ -447,7 +450,18 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 </button>
                             </div>
 
-                            {/* Audio Specific Progress - Show only when processing */}
+                            {/* Report View Button for Completed Audio */}
+                            {item.type === 'audio' && item.status === 'completed' && (
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); setViewingReportSessionId(item.id); }}
+                                    className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition border border-indigo-200 mb-1"
+                                >
+                                    <BookOpenCheck className="h-3.5 w-3.5" />
+                                    분석 리포트 보기
+                                </button>
+                            )}
+
+                            {/* Audio Specific Progress - Show only when processing short-circuit */}
                             {item.type === 'audio' && item.stats && item.status !== 'completed' && item.status !== 'reasoning' && item.status !== 'succeeded' && (
                                 <div className="mt-2 bg-gray-50 p-2 rounded text-xs text-gray-600">
                                     <div className="flex justify-between border-b pb-1 mb-1 border-gray-200">
@@ -503,6 +517,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
           )}
         </button>
       </div>
+
+      <ReportViewerModal 
+        isOpen={!!viewingReportSessionId} 
+        onClose={() => setViewingReportSessionId(null)}
+        sessionId={viewingReportSessionId || ''}
+        title={items.find(i => i.id === viewingReportSessionId)?.title || '분석 리포트'}
+      />
     </div>
   )
 }

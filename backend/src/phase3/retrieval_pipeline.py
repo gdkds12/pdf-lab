@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple
 from collections import defaultdict
 import hashlib
 
+from tenacity import retry, stop_after_attempt, wait_exponential
 from vertexai.language_models import TextEmbeddingModel
 
 from src.shared.config import Config
@@ -62,8 +63,8 @@ class RetrievalPipeline:
             all_candidates = []
             
             # DB connection is HTTP (Supabase), so it handles concurrency well. 
-            # But local thread limit applies.
-            max_workers = 20 
+            # But high concurrency with large payloads causes Protocol Errors (HTTP/2 flow control).
+            max_workers = 1
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_query = {
                     executor.submit(self._search_rpc, q_text, q_vec): q_text
@@ -136,6 +137,7 @@ class RetrievalPipeline:
         
         return all_embeddings
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _search_rpc(self, query_text: str, query_embedding: List[float]) -> List[Dict]:
         # Call the Supabase RPC function 'hybrid_search_rrf'
         params = {
