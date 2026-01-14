@@ -1,6 +1,5 @@
 'use client'
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog" // Assuming you have shadcn or similar, if not I'll build a simple modal
 import { useEffect, useState } from "react"
 import { createClient } from "@/utils/supabase/client"
 import { Loader2, X, BookOpen, AlertTriangle, Lightbulb } from "lucide-react"
