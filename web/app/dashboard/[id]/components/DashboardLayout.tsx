@@ -2,61 +2,54 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Settings, PanelRight } from "lucide-react"
+import { Settings, ChevronRight, Home } from "lucide-react"
 import SourcePanel from "./SourcePanel"
 import ChatInterface from "./ChatInterface"
-import SettingsPanel from "./SettingsPanel" // 새로 만들 예정
+import SettingsPanel from "./SettingsPanel" 
 
 export default function DashboardLayout({ subject }: { subject: any }) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   return (
-    <div className="flex h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex h-14 items-center justify-between border-b border-gray-200 px-4">
-        <div className="flex items-center gap-4">
-          <Link 
-            href="/dashboard"
-            className="rounded-full p-2 text-gray-500 hover:bg-gray-100 transition"
-          >
-            <ArrowLeft className="h-5 w-5" />
+    <div className="flex flex-col h-full w-full bg-background">
+      {/* Top Bar / Breadcrumbs - Supabase Style */}
+      <div className="flex h-12 items-center justify-between border-b px-4 bg-white/50 backdrop-blur-sm">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Link href="/dashboard" className="flex items-center gap-1 hover:text-foreground transition-colors text-gray-500 hover:text-gray-900">
+            <Home className="h-4 w-4" />
           </Link>
-          <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded bg-indigo-100 text-xs font-bold text-indigo-700">
-                {subject.name.substring(0, 1)}
-            </span>
-            <h1 className="text-sm font-semibold text-gray-900">{subject.name}</h1>
-          </div>
+          <ChevronRight className="h-4 w-4 text-gray-300" />
+          <Link href="/dashboard" className="text-gray-500 hover:text-gray-900 transition-colors">
+            Dashboard
+          </Link>
+          <ChevronRight className="h-4 w-4 text-gray-300" />
+          <span className="font-medium text-gray-900">{subject.name}</span>
         </div>
         
-        <div className="flex items-center gap-2">
-            <button 
-                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-                className={`rounded-md p-2 text-sm font-medium transition ${isSettingsOpen ? 'bg-indigo-50 text-indigo-600' : 'text-gray-500 hover:bg-gray-50'}`}
-            >
-                <div className="flex items-center gap-2">
-                    <Settings className="h-4 w-4" />
-                    <span className="hidden sm:inline">설정</span>
-                </div>
-            </button>
-        </div>
-      </header>
+        <button 
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            className={`p-2 rounded-md transition-colors ${isSettingsOpen ? 'bg-indigo-50 text-indigo-600' : 'text-gray-500 hover:bg-gray-100'}`}
+            title="Toggle Settings"
+        >
+            <Settings className="h-4 w-4" />
+        </button>
+      </div>
 
       {/* Main Content Area - Grid Layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar - Sources */}
-        <aside className="w-80 flex-shrink-0 hidden md:block">
+        <aside className="w-80 flex-shrink-0 flex flex-col">
             <SourcePanel subjectId={subject.subject_id} />
         </aside>
 
         {/* Center - Chat */}
-        <main className="flex-1 min-w-0">
+        <main className="flex-1 min-w-0 bg-white relative">
             <ChatInterface />
         </main>
 
         {/* Right Sidebar - Settings (Collapsible) */}
         {isSettingsOpen && (
-             <aside className="w-80 flex-shrink-0 border-l border-gray-200 bg-white">
+             <aside className="w-80 flex-shrink-0 border-l border-gray-200 bg-white shadow-xl z-10">
                 <SettingsPanel />
              </aside>
         )}
