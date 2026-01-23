@@ -5,7 +5,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
-      '--no-cache',
+      '--cache-from', 'asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest',
       '-t', 'asia-northeast3-docker.pkg.dev/pdf-lab-468815/thunder-backend-repo/pdf-processor:latest',
       '.'
     ]

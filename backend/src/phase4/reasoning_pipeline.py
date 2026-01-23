@@ -275,18 +275,35 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         # 1. (id: UUID)
         # 2. (CHUNK id=UUID)
         # 3. id:UUID (sometimes Gemini forgets parenthesis)
-        id_pattern = re.compile(r'\s*\(?id:[\w-]+\)?', re.IGNORECASE)
-        chunk_pattern = re.compile(r'\s*\(?CHUNK id=[\w-]+\)?', re.IGNORECASE)
+        # capture group 1 is the ID
+        id_pattern = re.compile(r'\(?id:([\w-]+)\)?', re.IGNORECASE)
+        chunk_pattern = re.compile(r'\(?CHUNK id=([\w-]+)\)?', re.IGNORECASE)
 
         for key in valid_keys:
             items = report.get(key, [])
             if not isinstance(items, list): continue
             
             for item in items:
-                # 0. Clean Text (Why field)
+                # Ensure citations list exists
+                if "citations" not in item:
+                    item["citations"] = []
+                
+                # 0. Extract & Clean Text (Why field)
                 if "why" in item and isinstance(item["why"], str):
-                    # Remove raw IDs
                     text = item["why"]
+                    
+                    # Extract explicitly mentioned IDs in text and auto-add to citations
+                    found_ids = []
+                    found_ids.extend(id_pattern.findall(text))
+                    found_ids.extend(chunk_pattern.findall(text))
+                    
+                    for fid in found_ids:
+                        # Check if this ID is already in citations
+                        exists = any(c.get("chunk_id") == fid for c in item["citations"])
+                        if not exists and fid in chunks_map:
+                            item["citations"].append({"chunk_id": fid, "reason": "Mentioned in explanation"})
+
+                    # Remove raw IDs from text
                     text = id_pattern.sub('', text)
                     text = chunk_pattern.sub('', text)
                     # Clean up double spaces or trailing punctuation often left behind
