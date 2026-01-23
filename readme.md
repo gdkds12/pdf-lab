@@ -247,6 +247,8 @@ ON evidence_candidates(session_id, rrf_score DESC);
 Signals는 세션 전체를 시간순으로 정렬한다. [file:1]  
 References는 `evidence_candidates`에서 `chunk_id` 기준으로 dedup하되, 단순 텍스트 뭉치로 합치지 않고 **메타 포함 블록**으로 입력에 포함한다(식별자 유실 방지).
 
+**Lazy Retrieval 지원**: Phase 4 실행 시 `evidence_candidates`가 없으면 자동으로 Phase 3(Gathering)을 트리거하여 데이터를 보강한 후 추론을 진행한다.
+
 - 입력 블록 포맷(권장):
   - `[[CHUNK chunk_id=... source_id=... page=45-47 anchor=Chapter2/Gauss]]`
   - (다음 줄부터) `chunks.content_text`
