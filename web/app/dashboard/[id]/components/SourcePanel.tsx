@@ -359,7 +359,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col border-r border-gray-200 bg-white w-80">
+    <div className="flex h-full flex-col border-r border-gray-200 bg-gray-50/50 w-80">
       <input 
         type="file" 
         multiple
@@ -369,125 +369,105 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         accept="application/pdf,audio/*" 
       />
 
-      <div className="flex items-center justify-between border-b border-gray-200 p-4">
-        <h2 className="text-lg font-semibold text-gray-900">소스</h2>
-        <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-          {items.length}
-        </span>
+      {/* Header - Sidebar Style */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-100/50">
+        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sources</h2>
+        <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded-full">{items.length}</span>
+            <button 
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="p-1 hover:bg-gray-200 rounded text-gray-600 transition"
+                title="Add Source"
+            >
+                <Plus className="h-4 w-4" />
+            </button>
+        </div>
       </div>
 
       {/* Action Bar for Report Generation */}
       {items.some(i => i.type === 'audio' && i.selected) && (
-          <div className="bg-indigo-50 p-2 border-b border-indigo-100 animate-in slide-in-from-top-2">
+          <div className="bg-indigo-50/50 p-2 border-b border-indigo-100 animate-in slide-in-from-top-2">
               <button 
                 onClick={handleGenerateReport}
                 disabled={isGenerating}
-                className="w-full flex items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-500"
+                className="w-full flex items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-500"
               >
                   {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-                  리포트 생성 ({items.filter(i => i.selected).length})
+                  Generate Report ({items.filter(i => i.selected).length})
               </button>
           </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto">
         {items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-center">
-            <div className="rounded-full bg-gray-50 p-3">
-              <Upload className="h-6 w-6 text-gray-400" />
-            </div>
-            <p className="mt-2 text-sm text-gray-500">
-              PDF나 오디오 파일을<br />추가해주세요
+          <div className="flex flex-col items-center justify-center py-10 text-center px-4">
+            <p className="text-xs text-gray-400">
+              No sources yet. Use the + button to add PDFs or Audio.
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="flex flex-col">
             {items.map((item) => (
-                <div key={item.id} className="relative flex flex-col rounded-lg border border-gray-200 p-3 hover:border-indigo-300 transition-colors bg-white">
+                <div 
+                    key={item.id} 
+                    className={`group relative flex flex-col border-b border-gray-100 px-4 py-3 hover:bg-white transition-colors cursor-pointer ${item.selected ? 'bg-indigo-50/30' : ''}`}
+                    onClick={() => { if(item.type === 'audio') toggleSelection(item.id) }}
+                >
                     <div className="flex items-start gap-3">
-                        {/* Checkbox for Audio only */}
-                        {item.type === 'audio' ? (
-                            <div className="pt-0.5">
-                                <input 
-                                    type="checkbox" 
-                                    checked={!!item.selected}
-                                    onChange={() => toggleSelection(item.id)}
-                                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
-                                />
-                            </div>
-                        ) : (
-                            <div className="pt-0.5">
-                                <FileText className="h-4 w-4 text-orange-500" />
-                            </div>
-                        )}
+                         {/* Icon */}
+                        <div className="pt-0.5 text-gray-400">
+                            {item.type === 'pdf' ? <FileText className="h-4 w-4" /> : <FileAudio className="h-4 w-4" />}
+                        </div>
                         
                         <div className="flex-1 min-w-0">
-                            <div className="flex justify-between items-start mb-1">
-                                <p className="text-sm font-medium text-gray-900 truncate" title={item.title}>
+                            <div className="flex justify-between items-center mb-0.5">
+                                <p className="text-sm font-medium text-gray-700 truncate group-hover:text-indigo-600 transition-colors" title={item.title}>
                                     {item.title}
                                 </p>
-                                {/* Status Icon & Text */}
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-[10px] ${item.status === 'processing' ? 'text-indigo-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
-                                        {getStatusText(item.status)}
-                                    </span>
-                                    {getStatusIcon(item.status)}
-                                </div>
                             </div>
                             
-                            <div className="flex items-center gap-2 mb-1">
-                                {renderBadge(item)}
-                                <span className="text-[10px] text-gray-400">
-                                    {new Date(item.createdAt).toLocaleTimeString()}
+                            <div className="flex items-center gap-2">
+                                <span className={`text-[10px] ${item.status === 'processing' ? 'text-indigo-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
+                                    {getStatusText(item.status)}
                                 </span>
-                                
+                                {getStatusIcon(item.status)}
+                                {item.type === 'audio' && (
+                                     <input 
+                                        type="checkbox" 
+                                        checked={!!item.selected}
+                                        onChange={(e) => { e.stopPropagation(); toggleSelection(item.id); }}
+                                        className="h-3 w-3 rounded text-indigo-600 focus:ring-indigo-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity"
+                                    />
+                                )}
+                            </div>
+
+                            {/* Actions Row (Hover only) */}
+                            <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-white/80 backdrop-blur rounded px-1 shadow-sm">
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.type); }}
-                                    className="ml-auto p-1 hover:bg-gray-200 rounded text-gray-400 hover:text-red-500 transition-colors"
-                                    title="항목 삭제"
+                                    className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded"
                                 >
                                     <Trash2 className="h-3 w-3" />
                                 </button>
+                                {item.type === 'audio' && item.status === 'completed' && (
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); setViewingReportSessionId(item.id); }}
+                                        className="p-1 hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 rounded"
+                                        title="View Report"
+                                    >
+                                        <BookOpenCheck className="h-3 w-3" />
+                                    </button>
+                                )}
                             </div>
-
-                            {/* Report View Button for Completed Audio */}
-                            {item.type === 'audio' && item.status === 'completed' && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); setViewingReportSessionId(item.id); }}
-                                    className="mt-2 w-full flex items-center justify-center gap-1.5 rounded-md bg-indigo-50 px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition border border-indigo-200 mb-1"
-                                >
-                                    <BookOpenCheck className="h-3.5 w-3.5" />
-                                    분석 리포트 보기
-                                </button>
-                            )}
-
-                            {/* Audio Specific Progress - Show only when processing short-circuit */}
-                            {item.type === 'audio' && item.stats && item.status !== 'completed' && item.status !== 'reasoning' && item.status !== 'succeeded' && (
-                                <div className="mt-2 bg-gray-50 p-2 rounded text-xs text-gray-600">
-                                    <div className="flex justify-between border-b pb-1 mb-1 border-gray-200">
-                                        <span>Phase 2 (Signal)</span>
-                                    </div>
-                                    {renderProgressBar(item.stats)}
-                                </div>
-                            )}
-
-                            {/* Reasoning Phase Logs */}
-                            {item.type === 'audio' && item.logs && item.logs.length > 0 && (
-                                <div className="mt-2 bg-slate-900 text-emerald-400 p-2.5 rounded shadow-inner text-[10px] font-mono leading-relaxed">
-                                    <div className="flex items-center justify-between border-b border-slate-700 pb-1 mb-1.5 opacity-80">
-                                        <span className="font-semibold uppercase tracking-wider text-[9px]">Phase 4 Logs</span>
-                                        <span className="text-[9px] text-slate-400">{item.status}</span>
-                                    </div>
-                                    <div className="flex flex-col gap-1 max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-                                        {[...item.logs].reverse().map((log, i) => (
-                                            <div key={i} className="break-words border-l-2 border-slate-700 pl-2">
-                                                <span className="text-slate-500 text-[9px] block mb-0.5">
-                                                    {log.ts && log.ts.includes('T') ? log.ts.split('T')[1].split('.')[0] : ''}
-                                                </span>
-                                                {log.msg}
-                                            </div>
-                                        ))}
-                                    </div>
+                           
+                            {/* Progress bar logic (simplified style) */}
+                            {item.type === 'audio' && item.stats && item.status === 'processing' && (
+                                <div className="mt-1 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                                    <div 
+                                        className="h-full bg-indigo-500 transition-all duration-500"
+                                        style={{ width: `${Math.round((item.stats.completed / item.stats.total) * 100)}%` }}
+                                    />
                                 </div>
                             )}
                         </div>
@@ -498,31 +478,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         )}
       </div>
 
-      <div className="border-t border-gray-200 p-4">
-        <button 
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-gray-400"
-        >
-          {isUploading ? (
-              <span className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  업로드 중...
-              </span>
-          ) : (
-              <>
-                <Plus className="h-5 w-5" />
-                소스 추가
-              </>
-          )}
-        </button>
-      </div>
-
+      {/* Footer / Upload moved to header actions */}
+      
       <ReportViewerModal 
         isOpen={!!viewingReportSessionId} 
         onClose={() => setViewingReportSessionId(null)}
         sessionId={viewingReportSessionId || ''}
-        title={items.find(i => i.id === viewingReportSessionId)?.title || '분석 리포트'}
+        title={items.find(i => i.id === viewingReportSessionId)?.title || 'Analysis Report'}
       />
     </div>
   )
