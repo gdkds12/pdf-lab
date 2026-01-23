@@ -1,6 +1,7 @@
 ﻿import logging
 import json
 import sys
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
@@ -228,7 +229,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - Use EXACT chunk_ids from input in citations.
 - Return VALID JSON only.
 - **IMPORTANT**: Write the report entirely in KOREAN (한국어). The 'title' and 'why' fields MUST be in Korean.
-- **STYLE**: In the 'why' field, write natural sentences. DO NOT include raw Signal IDs (e.g., "(id:...)") or specific timestamps in the text. Focus on the *content* of what was said.
+- **STYLE**: In the 'why' field, write natural sentences. **NEVER** include raw Signal IDs or Chunk IDs (e.g., "(id:f3c...)", "(CHUNK id=...)") in the text. Citing them in 'audio_refs' or 'citations' array is enough.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
         logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH) [DEBUG: {Config.REASONING_MODEL_NAME}]")
@@ -269,11 +270,29 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         valid_keys = ["professor_mentioned", "likely", "trap_warnings"]
         cleaned = {k: [] for k in valid_keys}
         
+        # Regex to strip (id:...) or (CHUNK id=...) from text
+        # Patterns: 
+        # 1. (id: UUID)
+        # 2. (CHUNK id=UUID)
+        # 3. id:UUID (sometimes Gemini forgets parenthesis)
+        id_pattern = re.compile(r'\s*\(?id:[\w-]+\)?', re.IGNORECASE)
+        chunk_pattern = re.compile(r'\s*\(?CHUNK id=[\w-]+\)?', re.IGNORECASE)
+
         for key in valid_keys:
             items = report.get(key, [])
             if not isinstance(items, list): continue
             
             for item in items:
+                # 0. Clean Text (Why field)
+                if "why" in item and isinstance(item["why"], str):
+                    # Remove raw IDs
+                    text = item["why"]
+                    text = id_pattern.sub('', text)
+                    text = chunk_pattern.sub('', text)
+                    # Clean up double spaces or trailing punctuation often left behind
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    item["why"] = text
+
                 # 1. Check Confidence
                 conf = item.get("confidence", 0)
                 if conf < 0.3: continue # Filter low confidence
