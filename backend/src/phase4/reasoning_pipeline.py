@@ -228,6 +228,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - Use EXACT chunk_ids from input in citations.
 - Return VALID JSON only.
 - **IMPORTANT**: Write the report entirely in KOREAN (한국어). The 'title' and 'why' fields MUST be in Korean.
+- **STYLE**: In the 'why' field, write natural sentences. DO NOT include raw Signal IDs (e.g., "(id:...)") or specific timestamps in the text. Focus on the *content* of what was said.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
         logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH) [DEBUG: {Config.REASONING_MODEL_NAME}]")
@@ -287,6 +288,10 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                         chunk = chunks_map[cid]
                         cit["page_start"] = chunk.get("page_start")
                         cit["page_end"] = chunk.get("page_end")
+                        # Add a short snippet (e.g., first 100 chars) or the matched text if available (Gemini doesn't return matched text, just chunk_id)
+                        # Let's take the first 50 chars of the content
+                        full_text = chunk.get("content_text", "")
+                        cit["snippet"] = full_text[:60] + "..." if len(full_text) > 60 else full_text
                         valid_citations.append(cit)
                 
                 item["citations"] = valid_citations

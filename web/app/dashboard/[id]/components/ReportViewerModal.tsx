@@ -26,8 +26,10 @@ type ReportItem = {
     confidence: number
     citations: { 
         chunk_id: string
+        reason?: string
         page_start?: number
         page_end?: number
+        snippet?: string
     }[]
 }
 
@@ -192,15 +194,28 @@ function ReportCard({ item, type }: { item: ReportItem, type: 'high' | 'normal' 
             <p className="text-sm text-gray-700 leading-relaxed mb-3">{item.why}</p>
             
             {item.citations && item.citations.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
+                <div className="mt-3 space-y-2">
+                    <p className="text-xs font-semibold text-gray-500 flex items-center gap-1">
+                        <BookOpen className="h-3 w-3" /> 관련 교재 참조
+                    </p>
                     {item.citations.map((c, i) => (
-                        <span key={i} className="inline-flex items-center text-[10px] px-2 py-1 rounded bg-white border border-gray-200 text-gray-500">
-                            {c.page_start ? (
-                                <>p.{c.page_start}{c.page_end && c.page_end !== c.page_start ? `-${c.page_end}` : ''}</>
-                            ) : (
-                                <>Ref: {c.chunk_id.substring(0, 8)}...</>
+                        <div key={i} className="rounded-md bg-white border border-gray-200 p-2 text-xs shadow-sm hover:border-indigo-200 transition">
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 border border-gray-200 font-mono text-[10px] font-bold text-gray-700">
+                                    {c.page_start ? (
+                                        <>p.{c.page_start}{c.page_end && c.page_end !== c.page_start ? `-${c.page_end}` : ''}</>
+                                    ) : (
+                                        'Reference'
+                                    )}
+                                </span>
+                                {c.reason && <span className="text-indigo-600 font-medium truncate">{c.reason}</span>}
+                            </div>
+                            {c.snippet && (
+                                <p className="text-gray-600 pl-2 border-l-2 border-indigo-100 leading-relaxed text-[11px]">
+                                    "{c.snippet}"
+                                </p>
                             )}
-                        </span>
+                        </div>
                     ))}
                 </div>
             )}
