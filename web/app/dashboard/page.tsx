@@ -32,7 +32,7 @@ export default async function DashboardPage() {
       {subjects && subjects.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {subjects.map((subject) => (
-            <Link href={`/dashboard/${subject.id}`} key={subject.id}>
+            <Link href={`/dashboard/${subject.subject_id}`} key={subject.subject_id}>
               <Card className="hover:bg-muted/50 transition-colors cursor-pointer h-full">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-xl font-medium">{subject.name}</CardTitle>
