@@ -49,3 +49,11 @@ yarn-error.log*
 .idea/
 *.swp
 *.swo
+
+# Google Cloud Keys
+*.json
+
+# Google Cloud Keys
+gcp-key-temp.json
+service-account.json
+*.pem
