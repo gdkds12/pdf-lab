@@ -10,37 +10,32 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const { data: { user } } = await supabase.auth.getUser()
 
   return (
-    <div className="flex min-h-screen w-full bg-background">
-      {/* Sidebar - Mini Rail Style when needed, but here sticking to standard wide sidebar for consistency */}
-      <aside className="hidden w-64 flex-col border-r bg-slate-950 text-slate-300 md:flex">
-        <div className="flex h-12 items-center border-b border-slate-800 px-6">
-          <Link className="flex items-center gap-2 font-semibold text-white" href="/">
+    <div className="flex min-h-screen w-full bg-white font-sans antialiased">
+      {/* Sidebar - Mini Rail Style */}
+      <aside className="hidden w-[60px] flex-col border-r border-gray-200 bg-white md:flex items-center">
+        <div className="flex h-14 items-center justify-center w-full border-b border-gray-200">
+          <Link className="flex items-center justify-center text-gray-900" href="/">
             <Package2 className="h-6 w-6" />
-            <span className="">Project Thunder</span>
           </Link>
         </div>
-        <div className="flex flex-1 flex-col gap-2 p-2">
-          <div className="flex flex-col gap-1">
+        
+        <div className="flex flex-1 flex-col gap-4 py-4 w-full items-center">
             <Link
               href="/dashboard"
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-800 hover:text-white transition-colors text-white bg-slate-800"
+              className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 transition-colors border border-emerald-100 shadow-sm"
+              title="Dashboard"
             >
-              <LayoutDashboard className="h-4 w-4" />
-              Dashboard
+              <LayoutDashboard className="h-5 w-5" />
             </Link>
-          </div>
         </div>
-        <div className="mt-auto border-t border-slate-800 p-4">
-            <div className="flex items-center gap-3 px-2 py-2">
-                <div className="flex flex-col">
-                    <span className="text-sm font-medium text-white">{user?.email?.split('@')[0]}</span>
-                    <span className="text-xs text-slate-500">Free Plan</span>
-                </div>
+
+        <div className="mt-auto border-t border-gray-200 p-2 w-full flex flex-col items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 border border-gray-200 text-xs font-bold text-gray-700 mb-2 cursor-help" title={user?.email || 'User'}>
+                {user?.email?.charAt(0).toUpperCase() || 'U'}
             </div>
             <form action={signout}>
-                <Button variant="ghost" className="w-full justify-start gap-2 mt-2 text-slate-400 hover:text-white hover:bg-slate-800" size="sm">
-                    <LogOut className="h-4 w-4" />
-                    Sign Out
+                <Button variant="ghost" className="h-10 w-10 p-0 justify-center text-gray-400 hover:text-red-500 hover:bg-red-50" size="sm" title="Sign Out">
+                    <LogOut className="h-5 w-5" />
                 </Button>
             </form>
         </div>

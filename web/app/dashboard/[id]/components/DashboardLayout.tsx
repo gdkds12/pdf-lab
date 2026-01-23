@@ -11,49 +11,45 @@ export default function DashboardLayout({ subject }: { subject: any }) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   return (
-    <div className="flex flex-col h-full w-full bg-background">
-      {/* Top Bar / Breadcrumbs - Supabase Style */}
-      <div className="flex h-12 items-center justify-between border-b px-4 bg-white/50 backdrop-blur-sm">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Link href="/dashboard" className="flex items-center gap-1 hover:text-foreground transition-colors text-gray-500 hover:text-gray-900">
-            <Home className="h-4 w-4" />
-          </Link>
-          <ChevronRight className="h-4 w-4 text-gray-300" />
-          <Link href="/dashboard" className="text-gray-500 hover:text-gray-900 transition-colors">
-            Dashboard
-          </Link>
-          <ChevronRight className="h-4 w-4 text-gray-300" />
-          <span className="font-medium text-gray-900">{subject.name}</span>
-        </div>
-        
-        <button 
-            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-            className={`p-2 rounded-md transition-colors ${isSettingsOpen ? 'bg-indigo-50 text-indigo-600' : 'text-gray-500 hover:bg-gray-100'}`}
-            title="Toggle Settings"
-        >
-            <Settings className="h-4 w-4" />
-        </button>
+    <div className="flex h-full w-full bg-background overflow-hidden">
+      
+      {/* 2nd Column Sidebar - Project Explorer / Sources */}
+      {/* This renders directly next to the Global Rail (which is in the parent layout) */}
+      <aside className="w-72 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col z-20">
+         <SourcePanel subjectId={subject.subject_id} />
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex flex-1 flex-col min-w-0 bg-white relative z-10 h-full">
+         
+          {/* Top Bar / Breadcrumbs - Now sitting ABOVE the Chat, inside the main content area */}
+          <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-100 px-6 bg-white">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="font-semibold text-gray-900 text-lg">{subject.name}</span>
+              <span className="text-gray-300 mx-2">/</span>
+              <span className="text-indigo-600 font-medium bg-indigo-50 px-2 py-0.5 rounded text-xs">Analysis</span>
+            </div>
+            
+            <button 
+                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                className={`p-2 rounded-md transition-colors ${isSettingsOpen ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                title="Settings"
+            >
+                <Settings className="h-5 w-5" />
+            </button>
+          </div>
+
+          <main className="flex-1 min-h-0 overflow-hidden relative">
+              <ChatInterface />
+          </main>
       </div>
 
-      {/* Main Content Area - Grid Layout */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - Sources */}
-        <aside className="w-80 flex-shrink-0 flex flex-col">
-            <SourcePanel subjectId={subject.subject_id} />
-        </aside>
-
-        {/* Center - Chat */}
-        <main className="flex-1 min-w-0 bg-white relative">
-            <ChatInterface />
-        </main>
-
-        {/* Right Sidebar - Settings (Collapsible) */}
-        {isSettingsOpen && (
-             <aside className="w-80 flex-shrink-0 border-l border-gray-200 bg-white shadow-xl z-10">
-                <SettingsPanel />
-             </aside>
-        )}
-      </div>
+      {/* Right Sidebar - Settings (Overlays or pushes?) - keep pushing for now */}
+      {isSettingsOpen && (
+           <aside className="w-80 flex-shrink-0 border-l border-gray-200 bg-white shadow-xl z-30">
+              <SettingsPanel />
+           </aside>
+      )}
     </div>
   )
 }

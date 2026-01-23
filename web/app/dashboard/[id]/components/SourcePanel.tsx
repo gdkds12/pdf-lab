@@ -359,7 +359,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col border-r border-gray-200 bg-gray-50/50 w-80">
+    <div className="flex h-full flex-col bg-white w-full border-r border-gray-200">
       <input 
         type="file" 
         multiple
@@ -369,29 +369,29 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         accept="application/pdf,audio/*" 
       />
 
-      {/* Header - Sidebar Style */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-100/50">
-        <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sources</h2>
-        <div className="flex items-center gap-2">
-            <span className="text-[10px] text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded-full">{items.length}</span>
+      {/* Header - Sidebar Style - Matches Global Rail height approx */}
+      <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200 bg-white shrink-0">
+        <h2 className="text-sm font-semibold text-gray-700">Sources</h2>
+        <div className="flex items-center gap-1">
             <button 
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploading}
-                className="p-1 hover:bg-gray-200 rounded text-gray-600 transition"
+                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-emerald-600 transition flex items-center gap-1 text-xs font-medium"
                 title="Add Source"
             >
                 <Plus className="h-4 w-4" />
+                Add
             </button>
         </div>
       </div>
 
       {/* Action Bar for Report Generation */}
       {items.some(i => i.type === 'audio' && i.selected) && (
-          <div className="bg-indigo-50/50 p-2 border-b border-indigo-100 animate-in slide-in-from-top-2">
+          <div className="bg-emerald-50/50 p-2 border-b border-emerald-100 animate-in slide-in-from-top-2">
               <button 
                 onClick={handleGenerateReport}
                 disabled={isGenerating}
-                className="w-full flex items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-500"
+                className="w-full flex items-center justify-center gap-2 rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-500"
               >
                   {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
                   Generate Report ({items.filter(i => i.selected).length})
@@ -411,24 +411,24 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             {items.map((item) => (
                 <div 
                     key={item.id} 
-                    className={`group relative flex flex-col border-b border-gray-100 px-4 py-3 hover:bg-white transition-colors cursor-pointer ${item.selected ? 'bg-indigo-50/30' : ''}`}
+                    className={`group relative flex flex-col border-b border-gray-100 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${item.selected ? 'bg-emerald-50/30' : ''}`}
                     onClick={() => { if(item.type === 'audio') toggleSelection(item.id) }}
                 >
                     <div className="flex items-start gap-3">
                          {/* Icon */}
                         <div className="pt-0.5 text-gray-400">
-                            {item.type === 'pdf' ? <FileText className="h-4 w-4" /> : <FileAudio className="h-4 w-4" />}
+                            {item.type === 'pdf' ? <FileText className="h-4 w-4 text-gray-500" /> : <FileAudio className="h-4 w-4 text-emerald-600" />}
                         </div>
                         
                         <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-center mb-0.5">
-                                <p className="text-sm font-medium text-gray-700 truncate group-hover:text-indigo-600 transition-colors" title={item.title}>
+                                <p className="text-sm font-medium text-gray-700 truncate group-hover:text-emerald-600 transition-colors" title={item.title}>
                                     {item.title}
                                 </p>
                             </div>
                             
                             <div className="flex items-center gap-2">
-                                <span className={`text-[10px] ${item.status === 'processing' ? 'text-indigo-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
+                                <span className={`text-[10px] ${item.status === 'processing' ? 'text-emerald-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
                                     {getStatusText(item.status)}
                                 </span>
                                 {getStatusIcon(item.status)}
@@ -437,13 +437,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                         type="checkbox" 
                                         checked={!!item.selected}
                                         onChange={(e) => { e.stopPropagation(); toggleSelection(item.id); }}
-                                        className="h-3 w-3 rounded text-indigo-600 focus:ring-indigo-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity"
+                                        className="h-3 w-3 rounded text-emerald-600 focus:ring-emerald-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity"
                                     />
                                 )}
                             </div>
 
                             {/* Actions Row (Hover only) */}
-                            <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-white/80 backdrop-blur rounded px-1 shadow-sm">
+                            <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-white/90 backdrop-blur rounded px-1 shadow-sm border border-gray-100">
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.type); }}
                                     className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded"
@@ -453,7 +453,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 {item.type === 'audio' && item.status === 'completed' && (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); setViewingReportSessionId(item.id); }}
-                                        className="p-1 hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 rounded"
+                                        className="p-1 hover:bg-emerald-50 text-emerald-400 hover:text-emerald-600 rounded"
                                         title="View Report"
                                     >
                                         <BookOpenCheck className="h-3 w-3" />
@@ -465,7 +465,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                             {item.type === 'audio' && item.stats && item.status === 'processing' && (
                                 <div className="mt-1 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
                                     <div 
-                                        className="h-full bg-indigo-500 transition-all duration-500"
+                                        className="h-full bg-emerald-500 transition-all duration-500"
                                         style={{ width: `${Math.round((item.stats.completed / item.stats.total) * 100)}%` }}
                                     />
                                 </div>

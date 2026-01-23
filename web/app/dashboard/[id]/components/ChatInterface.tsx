@@ -29,10 +29,10 @@ export default function ChatInterface() {
                         Upload some PDFs or Audio files on the left, then ask me anything about the content.
                     </p>
                     <div className="space-y-2">
-                        <button className="block w-full text-left px-3 py-2 rounded bg-white border border-gray-200 hover:border-indigo-500 hover:text-indigo-600 transition truncate text-xs">
+                        <button className="block w-full text-left px-3 py-2 rounded bg-white border border-gray-200 hover:border-emerald-500 hover:text-emerald-600 transition truncate text-xs">
                            → Summarize the key concepts from the lecture
                         </button>
-                        <button className="block w-full text-left px-3 py-2 rounded bg-white border border-gray-200 hover:border-indigo-500 hover:text-indigo-600 transition truncate text-xs">
+                        <button className="block w-full text-left px-3 py-2 rounded bg-white border border-gray-200 hover:border-emerald-500 hover:text-emerald-600 transition truncate text-xs">
                            → Generate 5 quiz questions based on the PDF
                         </button>
                     </div>
@@ -46,16 +46,16 @@ export default function ChatInterface() {
                 <div className="flex w-full max-w-5xl mx-auto py-6 px-4 gap-6">
                     <div className="flex-shrink-0 w-8">
                         {msg.role === 'user' ? (
-                            <div className="w-6 h-6 rounded bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">U</div>
+                            <div className="w-6 h-6 rounded bg-emerald-600 flex items-center justify-center text-white text-xs font-bold">U</div>
                         ) : (
-                             <div className="w-6 h-6 rounded bg-emerald-600 flex items-center justify-center text-white text-xs font-bold">AI</div>
+                             <div className="w-6 h-6 rounded bg-gray-600 flex items-center justify-center text-white text-xs font-bold">AI</div>
                         )}
                     </div>
                     <div className="flex-1 space-y-2">
                         <div className="font-semibold text-xs uppercase tracking-wider text-gray-500">
                             {msg.role === 'user' ? 'User' : 'Assistant'}
                         </div>
-                        <div className="prose prose-sm prose-indigo max-w-none text-gray-800 leading-relaxed whitespace-pre-wrap">
+                        <div className="prose prose-sm prose-emerald max-w-none text-gray-800 leading-relaxed whitespace-pre-wrap">
                             {msg.content}
                         </div>
                     </div>
@@ -70,7 +70,7 @@ export default function ChatInterface() {
       <div className="border-t border-gray-200 bg-white p-4">
         <div className="max-w-5xl mx-auto">
             <form onSubmit={handleSubmit} className="relative">
-            <div className="relative flex items-center rounded-md border border-gray-300 bg-white shadow-sm focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600">
+            <div className="relative flex items-center rounded-md border border-gray-300 bg-white shadow-sm focus-within:border-emerald-600 focus-within:ring-1 focus-within:ring-emerald-600">
                 <input
                 type="text"
                 value={inputValue}
@@ -81,7 +81,7 @@ export default function ChatInterface() {
                 <button
                 type="submit"
                 disabled={!inputValue.trim()}
-                className="absolute right-2 p-1.5 rounded bg-gray-100 text-gray-500 hover:bg-indigo-600 hover:text-white disabled:bg-gray-50 disabled:text-gray-300 transition"
+                className="absolute right-2 p-1.5 rounded bg-gray-100 text-gray-500 hover:bg-emerald-600 hover:text-white disabled:bg-gray-50 disabled:text-gray-300 transition"
                 >
                 <Send className="h-4 w-4" />
                 </button>
