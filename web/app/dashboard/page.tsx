@@ -1,67 +1,60 @@
 import { createClient } from "@/utils/supabase/server"
 import { redirect } from "next/navigation"
 import Link from "next/link"
-import { Plus, Book, LogOut, Package2 } from "lucide-react"
+import { BookOpen } from "lucide-react"
 import AddSubjectModal from "./components/AddSubjectModal"
-import { signout } from "../login/actions"
-import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 
 export default async function DashboardPage() {
   const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   if (!user) {
     redirect('/login')
   }
 
-  const { data: subjects } = await supabase
-    .from('subjects')
-    .select('*')
-    .order('created_at', { ascending: false })
+  const { data: subjects } = await supabase.from('subjects').select('*').order('created_at', { ascending: false })
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold md:text-2xl">My Subjects</h1>
-        <AddSubjectModal />
-      </div>
-
-      {subjects && subjects.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {subjects.map((subject) => (
-            <Link href={`/dashboard/${subject.subject_id}`} key={subject.subject_id}>
-              <Card className="hover:bg-muted/50 transition-colors cursor-pointer h-full">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-xl font-medium">{subject.name}</CardTitle>
-                  <Book className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(subject.created_at).toLocaleDateString()}
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <Badge variant="secondary">Books: 0</Badge>
-                    <Badge variant="secondary">Reports: 0</Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      ) : (
-        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed shadow-sm">
-          <div className="flex flex-col items-center gap-1 text-center py-20">
-            <Book className="h-12 w-12 text-muted-foreground" />
-            <h3 className="text-2xl font-bold tracking-tight">No subjects found</h3>
-            <p className="text-sm text-muted-foreground">You haven't created any subjects yet.</p>
-            <div className="mt-4">
-              <AddSubjectModal buttonOnly />
-            </div>
+    <div className="mobile-shell space-y-4 py-4">
+      <section className="surface p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-bold">내 학습 프로젝트</h1>
+            <p className="text-xs text-muted-foreground">과목별로 출제 신호 분석 세션을 관리하세요.</p>
+          </div>
+          <div className="shrink-0">
+            <AddSubjectModal buttonOnly />
           </div>
         </div>
+      </section>
+
+      {subjects && subjects.length > 0 ? (
+        <section className="space-y-3">
+          {subjects.map((subject) => (
+            <Link key={subject.subject_id} href={`/dashboard/${subject.subject_id}`} className="surface block p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-base font-semibold">{subject.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    생성일 {new Date(subject.created_at).toLocaleDateString('ko-KR')}
+                  </p>
+                </div>
+                <BookOpen className="h-5 w-5 text-primary" />
+              </div>
+            </Link>
+          ))}
+        </section>
+      ) : (
+        <section className="surface p-6 text-center">
+          <BookOpen className="mx-auto h-8 w-8 text-primary" />
+          <p className="mt-3 text-sm font-semibold">아직 과목이 없습니다.</p>
+          <p className="mt-1 text-xs text-muted-foreground">과목을 추가하고 학습 내비게이션 분석을 시작하세요.</p>
+          <div className="mt-4 inline-flex">
+            <AddSubjectModal buttonOnly />
+          </div>
+        </section>
       )}
     </div>
   )

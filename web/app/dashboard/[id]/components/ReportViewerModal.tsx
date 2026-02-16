@@ -29,7 +29,6 @@ type ReportItem = {
         reason?: string
         page_start?: number
         page_end?: number
-        snippet?: string
     }[]
 }
 
@@ -210,11 +209,9 @@ function ReportCard({ item, type }: { item: ReportItem, type: 'high' | 'normal' 
                                 </span>
                                 {c.reason && <span className="text-indigo-600 font-medium truncate">{c.reason}</span>}
                             </div>
-                            {c.snippet && (
-                                <p className="text-gray-600 pl-2 border-l-2 border-indigo-100 leading-relaxed text-[11px]">
-                                    "{c.snippet}"
-                                </p>
-                            )}
+                            <p className="text-gray-500 pl-2 border-l-2 border-indigo-100 leading-relaxed text-[11px]">
+                                원문 텍스트는 제공되지 않으며 위치 정보만 제공합니다.
+                            </p>
                         </div>
                     ))}
                 </div>
