@@ -15,6 +15,10 @@ const bucketName = 'project-thunder-assets-pdf-lab-468815'
 
 export async function getSignedUploadUrl({ fileName, contentType }: { fileName: string, contentType: string }) {
     'use server'
+
+    if (!contentType.startsWith('audio/')) {
+        throw new Error('Only audio uploads are allowed via server signed URL')
+    }
     
     // GCS Signed URL generation
     const options = {
@@ -39,19 +43,27 @@ export async function getSignedUploadUrl({ fileName, contentType }: { fileName: 
 
 export async function createSourceAndTrigger(subjectId: string, title: string, gcsPath: string) {
     'use server'
+    throw new Error("Deprecated: textbook uploads must go directly from client to Gemini")
+}
+
+export async function createSourceFromGeminiFile(subjectId: string, title: string, geminiFileUri: string) {
+    'use server'
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    
+
     if (!user) throw new Error("Unauthorized")
 
-    // 1. Insert Source
+    if (!geminiFileUri.startsWith('https://generativelanguage.googleapis.com/') && !geminiFileUri.startsWith('files/')) {
+        throw new Error("Invalid Gemini file URI")
+    }
+
     const { data: source, error } = await supabase.from('sources').insert({
         user_id: user.id,
         subject_id: subjectId,
-        kind: 'textbook', // Default for now
-        title: title,
-        gcs_pdf_url: gcsPath,
-        ingest_status: 'queued'
+        kind: 'textbook',
+        title,
+        gcs_pdf_url: geminiFileUri,
+        ingest_status: 'succeeded'
     }).select().single()
 
     if (error) {
@@ -59,34 +71,8 @@ export async function createSourceAndTrigger(subjectId: string, title: string, g
         throw new Error("Failed to create source record")
     }
 
-    // 2. Trigger Cloud Run Job
-    try {
-        const runClient = new JobsClient();
-        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
-        
-        await runClient.runJob({
-            name: jobName,
-            overrides: {
-                containerOverrides: [
-                    {
-                        args: ['--phase', '1', '--job-payload', JSON.stringify({
-                            source_id: source.source_id,
-                            gcs_pdf_url: gcsPath
-                        })]
-                    }
-                ]
-            }
-        });
-        
-        console.log(`Triggered Cloud Run Job: ${jobName} for source ${source.source_id}`);
-    } catch (jobError) {
-        console.error("Failed to trigger Cloud Run Job:", jobError);
-        throw new Error("Failed to start processing job. Please try again.");
-    }
-    
-    // Trigger Revalidation
     revalidatePath(`/dashboard/${subjectId}`)
-    
+
     return { success: true, sourceId: source.source_id }
 }
 

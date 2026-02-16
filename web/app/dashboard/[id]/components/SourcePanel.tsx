@@ -2,7 +2,7 @@
 
 import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2, BookOpenCheck } from "lucide-react"
 import { useState, useRef, useEffect, useMemo } from "react"
-import { getSignedUploadUrl, createSourceAndTrigger, createSessionAndTrigger, createReportJob, deleteSourceItem } from "../actions"
+import { getSignedUploadUrl, createSourceFromGeminiFile, createSessionAndTrigger, createReportJob, deleteSourceItem } from "../actions"
 import { createClient } from "@/utils/supabase/client"
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js"
 import ReportViewerModal from "./ReportViewerModal"
@@ -251,22 +251,61 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             
             if (!isPdf && !isAudio) continue 
 
-            const fileName = `${subjectId}/${Date.now()}_${file.name}`
-            const { url, gcsPath } = await getSignedUploadUrl({ 
-                fileName, 
-                contentType: file.type 
-            })
-
-            await fetch(url, {
-                method: 'PUT',
-                body: file,
-                headers: { 'Content-Type': file.type }
-            })
-
             if (isAudio) {
+               const fileName = `${subjectId}/${Date.now()}_${file.name}`
+               const { url, gcsPath } = await getSignedUploadUrl({ 
+                   fileName, 
+                   contentType: file.type 
+               })
+
+               await fetch(url, {
+                   method: 'PUT',
+                   body: file,
+                   headers: { 'Content-Type': file.type }
+               })
+
                await createSessionAndTrigger(subjectId, file.name, gcsPath)
             } else {
-               await createSourceAndTrigger(subjectId, file.name, gcsPath)
+               const sessionRes = await fetch('/api/gemini/upload-session', {
+                   method: 'POST',
+                   headers: {
+                       'Content-Type': 'application/json'
+                   },
+                   body: JSON.stringify({
+                       fileName: file.name,
+                       mimeType: file.type,
+                       sizeBytes: file.size,
+                   })
+               })
+
+               if (!sessionRes.ok) {
+                   const errorText = await sessionRes.text()
+                   throw new Error(errorText || 'Gemini 업로드 세션 생성 실패')
+               }
+
+               const { uploadUrl } = await sessionRes.json() as { uploadUrl: string }
+               const uploadRes = await fetch(uploadUrl, {
+                   method: 'POST',
+                   headers: {
+                       'X-Goog-Upload-Command': 'upload, finalize',
+                       'X-Goog-Upload-Offset': '0',
+                       'Content-Type': file.type,
+                   },
+                   body: file,
+               })
+
+               if (!uploadRes.ok) {
+                   const errorText = await uploadRes.text()
+                   throw new Error(errorText || 'Gemini 파일 업로드 실패')
+               }
+
+               const uploadPayload = await uploadRes.json() as { file?: { uri?: string } }
+               const geminiFileUri = uploadPayload.file?.uri
+               if (!geminiFileUri) {
+                   throw new Error('Gemini 파일 URI를 받지 못했습니다.')
+               }
+
+               await createSourceFromGeminiFile(subjectId, file.name, geminiFileUri)
             }
         }
     } catch (error) {
@@ -385,6 +424,10 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         </div>
       </div>
 
+      <div className="border-b border-gray-100 bg-gray-50 px-4 py-2 text-[11px] text-gray-500">
+        PDF는 클라이언트에서 Gemini로 직접 업로드되며 원문은 UI에서 열람할 수 없습니다.
+      </div>
+
       {/* Action Bar for Report Generation */}
       {items.some(i => i.type === 'audio' && i.selected) && (
           <div className="bg-emerald-50/50 p-2 border-b border-emerald-100 animate-in slide-in-from-top-2">
@@ -489,4 +532,3 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
     </div>
   )
 }
-

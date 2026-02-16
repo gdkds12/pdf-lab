@@ -4,49 +4,45 @@
 
 @layer base {
   :root {
-    /* Themeable Colors - Restored to Original Vibe */
-    --background: 210 11% 7%; /* #0f1211 */
-    --foreground: 160 14% 93%; /* #e7eceb */
-
-    --muted: 240 2% 16%; /* #27272a */
-    --muted-foreground: 160 14% 93% / 0.7; /* rgba(231, 236, 235, 0.7) */
-    --muted-foreground-light: 160 14% 93% / 0.5; /* rgba(231, 236, 235, 0.5) */
-    --muted-foreground-dark: 160 14% 93% / 0.6; /* rgba(231, 236, 235, 0.6) */
-
-    --card: 220 17% 98% / 0.01;
-    --card-foreground: 160 14% 93%;
-
-    --popover: 210 11% 7%;
-    --popover-foreground: 160 14% 93%;
-
-    /* Primary Accent Colors */
-    --primary: 165 96% 71%; /* #78fcd6 */
-    --primary-foreground: 160 8% 6%; /* #0d0f0e */
-    --primary-dark: 160 100% 50%; /* #00ffb6 */
-    --primary-light: 160 48% 87%; /* New variable for lighter teal/green shades */
-
-    /* Secondary Accent Colors (for buttons, etc.) */
-    --secondary: 160 14% 93%; /* #e7eceb */
-    --secondary-foreground: 165 14% 8%; /* #141a18 */
-
-    --accent: 240 2% 25%; /* #3f3f42 */
-    --accent-foreground: 240 2% 96%; /* #f4f4f5 */
-
-    --border: 240 100% 100% / 0.08; /* rgba(255, 255, 255, 0.08) */
-    --border-light: 210 17% 6% / 0.1; /* rgba(16,24,40,0.1) */
-    --border-dark: 210 17% 6% / 0.05; /* rgba(16,24,40,0.05) */
-
-    --ring: 165 96% 71%;
-
-    --radius: 0.5rem;
+    --background: 220 33% 98%;
+    --foreground: 224 36% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 36% 16%;
+    --muted: 220 22% 95%;
+    --muted-foreground: 220 12% 38%;
+    --primary: 244 88% 63%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 211 100% 92%;
+    --secondary-foreground: 221 44% 25%;
+    --accent: 264 85% 95%;
+    --accent-foreground: 263 64% 30%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 24% 88%;
+    --ring: 244 88% 63%;
+    --radius: 0.75rem;
   }
-}
 
-@layer base {
   * {
     @apply border-border;
   }
+
+  html,
   body {
     @apply bg-background text-foreground;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+}
+
+@layer components {
+  .mobile-shell {
+    @apply mx-auto w-full max-w-md px-4;
+  }
+
+  .surface {
+    @apply rounded-2xl border border-border bg-card shadow-sm;
   }
 }
