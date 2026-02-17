@@ -17,32 +17,32 @@ export function WorkSection() {
           }`}
         >
           <h2 className="mb-2 font-sans text-5xl font-light tracking-tight text-foreground md:text-6xl lg:text-7xl">
-            Featured
+            Evidence
           </h2>
-          <p className="font-mono text-sm text-foreground/60 md:text-base">/ Recent explorations</p>
+          <p className="font-mono text-sm text-foreground/60 md:text-base">/ Phase-by-phase implementation snapshot</p>
         </div>
 
         <div className="space-y-6 md:space-y-8">
           {[
             {
               number: "01",
-              title: "Kinetic Typography",
-              category: "Interactive Experience",
-              year: "2024",
+              title: "Phase 1: Textbook Knowledge Base",
+              category: "OCR + structure chunking + pgvector/halfvec",
+              year: "Ready",
               direction: "left",
             },
             {
               number: "02",
-              title: "Generative Patterns",
-              category: "Visual System",
-              year: "2024",
+              title: "Phase 2: Audio Signal Extraction",
+              category: "강조/반복/시험언급 신호 추출",
+              year: "Ready",
               direction: "right",
             },
             {
               number: "03",
-              title: "Spatial Interface",
-              category: "3D Navigation",
-              year: "2023",
+              title: "Phase 3-4: Retrieval + Global Reasoning",
+              category: "Hybrid RRF 검색 + 통합 리포트 생성",
+              year: "Running",
               direction: "left",
             },
           ].map((project, i) => (

@@ -17,31 +17,31 @@ export function ServicesSection() {
           }`}
         >
           <h2 className="mb-2 font-sans text-5xl font-light tracking-tight text-foreground md:text-6xl lg:text-7xl">
-            Capabilities
+            Pipeline
           </h2>
-          <p className="font-mono text-sm text-foreground/60 md:text-base">/ What we bring to the table</p>
+          <p className="font-mono text-sm text-foreground/60 md:text-base">/ Why Thunder is different</p>
         </div>
 
         <div className="grid gap-8 md:grid-cols-2 md:gap-x-16 md:gap-y-12 lg:gap-x-24">
           {[
             {
-              title: "Creative Development",
-              description: "Pushing the boundaries of what's possible on the web",
+              title: "Global Context Reasoning",
+              description: "한 학기 전체 맥락을 유지한 통합 추론으로 단편 요약 한계를 넘어섭니다.",
               direction: "top",
             },
             {
-              title: "Visual Design",
-              description: "Crafting memorable experiences through thoughtful aesthetics",
+              title: "Hybrid Retrieval (RRF)",
+              description: "벡터 + 키워드 검색 결합으로 근거 Recall을 높이고 근거 없는 응답을 줄입니다.",
               direction: "right",
             },
             {
-              title: "Motion & Animation",
-              description: "Bringing interfaces to life with purposeful movement",
+              title: "Copyright-Safe Output",
+              description: "원문 재출력 없이 citation 위치 정보 중심으로 학습 행동을 안내합니다.",
               direction: "left",
             },
             {
-              title: "Technical Strategy",
-              description: "Building scalable solutions that perform beautifully",
+              title: "Cost Optimized Architecture",
+              description: "경량 모델 + 단계형 추론 설계로 고품질을 저비용으로 유지합니다.",
               direction: "bottom",
             },
           ].map((service, i) => (

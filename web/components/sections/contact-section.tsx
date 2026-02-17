@@ -46,16 +46,16 @@ export function ContactSection() {
               }`}
             >
               <h2 className="mb-2 font-sans text-4xl font-light leading-[1.05] tracking-tight text-foreground md:mb-3 md:text-7xl lg:text-8xl">
-                Let's
+                Deploy
                 <br />
-                talk
+                Thunder
               </h2>
-              <p className="font-mono text-xs text-foreground/60 md:text-base">/ Get in touch</p>
+              <p className="font-mono text-xs text-foreground/60 md:text-base">/ Start with your own lecture set</p>
             </div>
 
             <div className="space-y-4 md:space-y-8">
               <a
-                href="mailto:hello@studio.com"
+                href="mailto:gdkds12@gmail.com"
                 className={`group block transition-all duration-700 ${
                   isVisible ? "translate-x-0 opacity-100" : "-translate-x-16 opacity-0"
                 }`}
@@ -66,7 +66,7 @@ export function ContactSection() {
                   <span className="font-mono text-xs text-foreground/60">Email</span>
                 </div>
                 <p className="text-base text-foreground transition-colors group-hover:text-foreground/70 md:text-2xl">
-                  hello@studio.com
+                  gdkds12@gmail.com
                 </p>
               </a>
 
@@ -80,7 +80,7 @@ export function ContactSection() {
                   <MapPin className="h-3 w-3 text-foreground/60" />
                   <span className="font-mono text-xs text-foreground/60">Location</span>
                 </div>
-                <p className="text-base text-foreground md:text-2xl">New York, NY</p>
+                <p className="text-base text-foreground md:text-2xl">Seoul, KR</p>
               </div>
 
               <div
@@ -89,7 +89,7 @@ export function ContactSection() {
                 }`}
                 style={{ transitionDelay: "500ms" }}
               >
-                {["Twitter", "Instagram", "LinkedIn", "Dribbble"].map((social, i) => (
+                {["Cloud Run", "Supabase", "Gemini", "RAG"].map((social, i) => (
                   <a
                     key={social}
                     href="#"
@@ -165,14 +165,23 @@ export function ContactSection() {
                 <MagneticButton
                   variant="primary"
                   size="lg"
+                  type="submit"
                   className="w-full disabled:opacity-50"
                   onClick={isSubmitting ? undefined : undefined}
                 >
                   {isSubmitting ? "Sending..." : "Send Message"}
                 </MagneticButton>
                 {submitSuccess && (
-                  <p className="mt-3 text-center font-mono text-sm text-foreground/80">Message sent successfully!</p>
+                  <p className="mt-3 text-center font-mono text-sm text-foreground/80">요청이 접수되었습니다.</p>
                 )}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <MagneticButton size="default" variant="secondary" className="w-full" onClick={() => (window.location.href = "/login")}>
+                    Login
+                  </MagneticButton>
+                  <MagneticButton size="default" variant="secondary" className="w-full" onClick={() => (window.location.href = "/dashboard")}>
+                    Dashboard
+                  </MagneticButton>
+                </div>
               </div>
             </form>
           </div>
