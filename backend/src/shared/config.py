@@ -28,6 +28,8 @@ class Config:
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
+    PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "12"))
+    PHASE1_OCR_TIMEOUT_SEC = int(os.getenv("PHASE1_OCR_TIMEOUT_SEC", "90"))
     PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "1"))
     PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "2"))
     PHASE2_CHUNK_MAX_RETRIES = int(os.getenv("PHASE2_CHUNK_MAX_RETRIES", "3"))

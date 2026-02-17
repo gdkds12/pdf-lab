@@ -161,61 +161,67 @@ class IngestPipeline:
             doc = fitz.open(self.local_pdf_path)
             total_pages = len(doc)
             batch_size = Config.INGEST_BATCH_PAGES
-            
-            # Prepare batches
             tasks = []
             for start_page in range(0, total_pages, batch_size):
                 end_page = min(start_page + batch_size, total_pages)
-                
-                # Create sub-PDF in main thread (fast)
-                new_doc = fitz.open()
-                new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page-1)
-                pdf_bytes = new_doc.tobytes()
-                new_doc.close()
-                
                 tasks.append({
-                    "pdf_bytes": pdf_bytes,
                     "start_page": start_page,
                     "end_page": end_page
                 })
-            
-            doc.close() # Close main doc early to free resource if possible, or keep it if needed.
-            
-            # Execute in Parallel
+
+            doc.close()
+
+            # Execute in bounded parallelism.
             all_pages_data = []
-            # User requested full parallelism: Run all batches at once.
-            # Tier 1 RPM is ~4000, so 60-100 concurrent requests is safe.
-            max_workers = len(tasks)
-            logger.info(f"Starting parallel OCR with {max_workers} workers (Full Parallelism) for {len(tasks)} batches.")
+            max_workers = max(1, min(len(tasks), Config.PHASE1_SCANNED_MAX_WORKERS))
+            logger.info(f"Starting parallel OCR with {max_workers} workers for {len(tasks)} batches.")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all tasks
-                future_to_batch = {
-                    executor.submit(
-                        self._call_gemini_ocr, 
-                        t["pdf_bytes"], 
-                        t["start_page"] + 1,
-                        t["end_page"] - t["start_page"] # expected_count
-                    ): t 
-                    for t in tasks
-                }
-                
-                # Collect results as they complete
-                results_map = {} # start_page -> list of pages
-                
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    batch_info = future_to_batch[future]
-                    start_p = batch_info["start_page"]
+                future_to_batch = {}
+                task_iter = iter(tasks)
+
+                # Prime worker pool.
+                for _ in range(max_workers):
                     try:
-                        data = future.result()
-                        results_map[start_p] = data
-                        logger.info(f"Batch {start_p+1}-{batch_info['end_page']} completed. Got {len(data)} pages.")
-                    except Exception as exc:
-                        logger.error(f"Batch {start_p+1}-{batch_info['end_page']} generated an exception: {exc}")
-                        # Depending on policy, we might fail hard or skip. 
-                        # Failing hard is safer for data integrity.
-                        raise exc
-            
+                        batch = next(task_iter)
+                    except StopIteration:
+                        break
+                    future = executor.submit(
+                        self._call_gemini_ocr_for_range,
+                        batch["start_page"],
+                        batch["end_page"]
+                    )
+                    future_to_batch[future] = batch
+
+                results_map = {}  # start_page -> list of pages
+                while future_to_batch:
+                    done, _ = concurrent.futures.wait(
+                        list(future_to_batch.keys()),
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+
+                    for future in done:
+                        batch_info = future_to_batch.pop(future)
+                        start_p = batch_info["start_page"]
+                        try:
+                            data = future.result()
+                            results_map[start_p] = data
+                            logger.info(f"Batch {start_p+1}-{batch_info['end_page']} completed. Got {len(data)} pages.")
+                        except Exception as exc:
+                            logger.error(f"Batch {start_p+1}-{batch_info['end_page']} generated an exception: {exc}")
+                            raise exc
+
+                        try:
+                            next_batch = next(task_iter)
+                        except StopIteration:
+                            continue
+                        next_future = executor.submit(
+                            self._call_gemini_ocr_for_range,
+                            next_batch["start_page"],
+                            next_batch["end_page"]
+                        )
+                        future_to_batch[next_future] = next_batch
+
             # Reassemble in order
             sorted_start_pages = sorted(results_map.keys())
             for sp in sorted_start_pages:
@@ -226,6 +232,15 @@ class IngestPipeline:
         except Exception as e:
             logger.error(f"Scanned processing failed: {e}")
             raise
+
+    def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
+        expected_count = end_page - start_page
+        with fitz.open(self.local_pdf_path) as doc:
+            new_doc = fitz.open()
+            new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
+            pdf_bytes = new_doc.tobytes()
+            new_doc.close()
+        return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
@@ -265,9 +280,9 @@ class IngestPipeline:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as request_executor:
             future = request_executor.submit(_generate)
             try:
-                response = future.result(timeout=40)
+                response = future.result(timeout=Config.PHASE1_OCR_TIMEOUT_SEC)
             except concurrent.futures.TimeoutError:
-                raise TimeoutError(f"Gemini API call timed out after 40 seconds for batch {start_page_offset}")
+                raise TimeoutError(f"Gemini API call timed out after {Config.PHASE1_OCR_TIMEOUT_SEC} seconds for batch {start_page_offset}")
         
         try:
             text = response.text
