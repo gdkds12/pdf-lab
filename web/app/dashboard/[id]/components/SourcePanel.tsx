@@ -31,6 +31,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const [isUploading, setIsUploading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [viewingReportSessionId, setViewingReportSessionId] = useState<string | null>(null)
+  const [latestReportSessionId, setLatestReportSessionId] = useState<string | null>(null)
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   
@@ -38,6 +39,18 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
 
   // Initial Fetch & Realtime Subscription
   useEffect(() => {
+    const refreshLatestReportSession = async () => {
+        const { data } = await supabase
+            .from('session_reports')
+            .select('session_id, created_at, sessions!inner(subject_id)')
+            .eq('sessions.subject_id', subjectId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+
+        const nextSessionId = Array.isArray(data) && data.length > 0 ? data[0].session_id : null
+        setLatestReportSessionId(nextSessionId)
+    }
+
     const fetchInitialData = async () => {
         // 1. Fetch PDFs (sources)
         const { data: sources } = await supabase
@@ -107,6 +120,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         // Sort by created most recent
         combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         setItems(combined)
+        await refreshLatestReportSession()
     }
 
     fetchInitialData()
@@ -119,6 +133,8 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             (payload) => handleSessionChange(payload))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'audio_chunks' }, 
             (payload) => handleChunkChange(payload)) 
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'session_reports' },
+            async () => { await refreshLatestReportSession() })
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
                 console.log('Ready to receive realtime updates');
@@ -436,6 +452,15 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200 bg-white shrink-0">
         <h2 className="text-sm font-semibold text-gray-700">Sources</h2>
         <div className="flex items-center gap-1">
+            <button
+                onClick={() => latestReportSessionId && setViewingReportSessionId(latestReportSessionId)}
+                disabled={!latestReportSessionId}
+                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-emerald-600 transition flex items-center gap-1 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                title={latestReportSessionId ? "Latest Integrated Report" : "아직 생성된 리포트가 없습니다"}
+            >
+                <BookOpenCheck className="h-4 w-4" />
+                Report
+            </button>
             <button 
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploading}
@@ -450,6 +475,9 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
 
       <div className="border-b border-gray-100 bg-gray-50 px-4 py-2 text-[11px] text-gray-500">
         PDF는 클라이언트에서 Gemini로 직접 업로드되며 원문은 UI에서 열람할 수 없습니다.
+      </div>
+      <div className="border-b border-gray-100 bg-gray-50 px-4 py-2 text-[11px] text-gray-500">
+        리포트는 선택한 오디오 전체를 통합해 1개로 생성됩니다.
       </div>
 
       {/* Action Bar for Report Generation */}
@@ -527,15 +555,6 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 >
                                     <Trash2 className="h-3 w-3" />
                                 </button>
-                                {item.type === 'audio' && item.status === 'completed' && (
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); setViewingReportSessionId(item.id); }}
-                                        className="p-1 hover:bg-emerald-50 text-emerald-400 hover:text-emerald-600 rounded"
-                                        title="View Report"
-                                    >
-                                        <BookOpenCheck className="h-3 w-3" />
-                                    </button>
-                                )}
                             </div>
                            
                             {/* Progress bar logic (simplified style) */}
