@@ -28,6 +28,16 @@ class Config:
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
+    PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "1"))
+
+    # Guardrail / Compliance Settings
+    DELETE_SOURCE_ASSETS_ON_SUCCESS = os.getenv("DELETE_SOURCE_ASSETS_ON_SUCCESS", "false").lower() in ("1", "true", "yes")
+    PHASE4_VERBATIM_WINDOW = int(os.getenv("PHASE4_VERBATIM_WINDOW", "80"))
+    PHASE4_MAX_TITLE_LEN = int(os.getenv("PHASE4_MAX_TITLE_LEN", "60"))
+    PHASE4_MAX_WHY_LEN = int(os.getenv("PHASE4_MAX_WHY_LEN", "260"))
+    PHASE4_MAX_AUDIO_REFS = int(os.getenv("PHASE4_MAX_AUDIO_REFS", "5"))
+    PHASE4_MAX_CITATIONS = int(os.getenv("PHASE4_MAX_CITATIONS", "5"))
+    PHASE4_STRICT_SCHEMA = os.getenv("PHASE4_STRICT_SCHEMA", "true").lower() in ("1", "true", "yes")
     
     @classmethod
     def validate(cls):

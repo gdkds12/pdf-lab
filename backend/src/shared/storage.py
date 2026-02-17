@@ -32,3 +32,16 @@ class StorageClient:
         logger.info(f"Uploading {local_path} to {gcs_uri}")
         blob.upload_from_filename(local_path)
         logger.info("Upload completed.")
+
+    def delete_file(self, gcs_uri: str):
+        """Deletes a file from GCS if it exists."""
+        if not gcs_uri.startswith("gs://"):
+            raise ValueError("GCS URI must start with gs://")
+
+        bucket_name, blob_name = gcs_uri[5:].split("/", 1)
+        bucket = self.client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+
+        logger.info(f"Deleting {gcs_uri}")
+        blob.delete()
+        logger.info("Delete completed.")

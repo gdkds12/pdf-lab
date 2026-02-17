@@ -15,6 +15,7 @@ import json_repair  # Import json_repair
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
 from src.shared.storage import StorageClient
+from src.shared.validation import parse_payload, require_gcs_uri, require_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,15 @@ class IngestPipeline:
                 "ingest_status": "succeeded",
                 "page_count": len(pages_data)
             }).eq("source_id", self.source_id).execute()
+
+            # Optional compliance mode: remove original source asset after successful ingest.
+            # The knowledge chunks remain for retrieval, but raw source file can be purged.
+            if Config.DELETE_SOURCE_ASSETS_ON_SUCCESS:
+                try:
+                    self.storage_client.delete_file(self.gcs_url)
+                    logger.info(f"Deleted original source asset: {self.gcs_url}")
+                except Exception as delete_err:
+                    logger.warning(f"Failed to delete original source asset {self.gcs_url}: {delete_err}")
             
             logger.info(f"Successfully updated source {self.source_id} status to succeeded.")
             
@@ -367,12 +377,9 @@ class IngestPipeline:
 def run(payload_str: str):
     logger.info("Phase 1: PDF Ingest Pipeline Started")
     try:
-        payload = json.loads(payload_str)
-        source_id = payload.get("source_id")
-        gcs_url = payload.get("gcs_pdf_url")
-        
-        if not source_id or not gcs_url:
-             raise ValueError("Missing source_id or gcs_pdf_url in payload")
+        payload = parse_payload(payload_str)
+        source_id = require_uuid(payload, "source_id")
+        gcs_url = require_gcs_uri(payload, "gcs_pdf_url")
              
         pipeline = IngestPipeline(source_id, gcs_url)
         pipeline.run()
@@ -380,4 +387,3 @@ def run(payload_str: str):
     except Exception as e:
         logger.error(f"Pipeline Fatal Error: {e}")
         sys.exit(1)
-

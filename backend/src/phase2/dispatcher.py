@@ -1,18 +1,17 @@
-import json
 import logging
 import math
 import subprocess
 import concurrent.futures
 import google.auth
-from google.auth import iam
 from google.auth.transport import requests as google_requests
-from google.auth.credentials import Signing, Credentials
 from typing import List, Dict, Any
 from google.cloud import storage
 from datetime import timedelta
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.storage import StorageClient
+from src.shared.validation import parse_payload, require_gcs_uri, require_uuid
 from src.phase2 import signal_extraction  # Import directly
 
 logger = logging.getLogger(__name__)
@@ -23,18 +22,11 @@ CHUNK_DURATION_SEC = 1800  # 30 minutes
 def run(payload_str: str):
     logger.info("Phase 2 Dispatcher: Splitting Audio Started (Single Worker Mode)")
     
-    try:
-        payload = json.loads(payload_str)
-    except json.JSONDecodeError:
-        raise ValueError("Invalid JSON payload")
-
-    session_id = payload.get("session_id")
-    gcs_audio_url = payload.get("gcs_audio_url")
+    payload = parse_payload(payload_str)
+    session_id = require_uuid(payload, "session_id")
+    gcs_audio_url = require_gcs_uri(payload, "gcs_audio_url")
     subject = payload.get("subject", "Unknown")
     exam_window = payload.get("exam_window", "midterm")
-
-    if not all([session_id, gcs_audio_url]):
-        raise ValueError("Missing session_id or gcs_audio_url")
 
     # 1. Get Audio Duration
     duration_sec = get_audio_duration(gcs_audio_url)
@@ -75,11 +67,23 @@ def run(payload_str: str):
     # 5. Process all chunks locally in parallel (ThreadPool)
     # Using 'copy' codec in ffmpeg makes this very lightweight on CPU.
     # Parallelism constrained by Network Bandwidth & Memory, not CPU.
-    process_chunks_locally(created_chunks, subject, exam_window)
+    processed_count, failed_ids = process_chunks_locally(created_chunks, subject, exam_window)
 
-    # 6. Mark Session Complete
+    # 6. Mark Session Status
+    if failed_ids and processed_count == 0:
+        supabase.table("sessions").update({"status": "failed"}).eq("session_id", session_id).execute()
+        raise RuntimeError(f"All chunks failed in Phase 2. failed_chunks={len(failed_ids)}")
+
     supabase.table("sessions").update({"status": "reasoning"}).eq("session_id", session_id).execute()
-    logger.info("Phase 2 Dispatcher: All chunks processed successfully.")
+    logger.info(f"Phase 2 Dispatcher finished. processed={processed_count}, failed={len(failed_ids)}")
+
+    # Optional compliance mode: remove original audio once signal extraction is done.
+    if Config.DELETE_SOURCE_ASSETS_ON_SUCCESS and not failed_ids:
+        try:
+            StorageClient().delete_file(gcs_audio_url)
+            logger.info(f"Deleted original audio asset: {gcs_audio_url}")
+        except Exception as delete_err:
+            logger.warning(f"Failed to delete original audio asset {gcs_audio_url}: {delete_err}")
 
 
 
@@ -134,25 +138,37 @@ def process_chunks_locally(chunks: List[Dict], subject: str, exam_window: str):
     Process chunks using ThreadPoolExecutor within this same container.
     """
     
+    failed_ids: List[str] = []
+    processed_count = 0
+
     def process_one(chunk):
         try:
             signal_extraction.process_chunk_internal(
                 session_id=chunk["session_id"],
                 audio_chunk_id=chunk["chunk_id"],
+                chunk_index=chunk["chunk_index"],
                 gcs_chunk_url=chunk["gcs_chunk_url"],
                 start_offset_sec=chunk["start_offset_sec"],
                 duration_sec=chunk["duration_sec"],
                 subject_name=subject,
                 exam_window=exam_window
             )
+            return (chunk["chunk_id"], True)
         except Exception as e:
             logger.error(f"Error processing chunk {chunk['chunk_id']}: {e}")
             # Depending on policy, we might want to fail the whole session or continue partially.
             # Continue for now.
+            return (chunk["chunk_id"], False)
 
     # Max workers: 50 threads. 
     # Since ffmpeg copy is IO bound and Gemini is IO bound, 50 is safe on 2-4 vCPU.
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
         futures = [executor.submit(process_one, chunk) for chunk in chunks]
-        concurrent.futures.wait(futures)
+        for future in concurrent.futures.as_completed(futures):
+            chunk_id, ok = future.result()
+            if ok:
+                processed_count += 1
+            else:
+                failed_ids.append(chunk_id)
 
+    return processed_count, failed_ids

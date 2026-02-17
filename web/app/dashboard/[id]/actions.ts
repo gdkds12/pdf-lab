@@ -4,7 +4,6 @@ import { createClient } from "@/utils/supabase/server"
 import { Storage } from "@google-cloud/storage"
 import { JobsClient } from "@google-cloud/run"
 import { revalidatePath } from "next/cache"
-import { redirect } from "next/navigation"
 
 // Init GCS
 // Ensure GOOGLE_APPLICATION_CREDENTIALS or gcloud auth is set in environment
@@ -12,6 +11,50 @@ const storage = new Storage({
     projectId: 'pdf-lab-468815',
 })
 const bucketName = 'project-thunder-assets-pdf-lab-468815'
+const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+async function runThunderJob(args: string[]) {
+    const runClient = new JobsClient()
+    await runClient.runJob({
+        name: jobName,
+        overrides: {
+            containerOverrides: [{ args }]
+        }
+    })
+}
+
+function assertUuid(value: string, fieldName: string): string {
+    const trimmed = (value || "").trim()
+    if (!UUID_PATTERN.test(trimmed)) {
+        throw new Error(`Invalid ${fieldName} UUID`)
+    }
+    return trimmed
+}
+
+function assertUuidList(values: string[], fieldName: string): string[] {
+    if (!Array.isArray(values) || values.length === 0) {
+        throw new Error(`Missing ${fieldName}`)
+    }
+    return values.map((v) => assertUuid(v, fieldName))
+}
+
+function parseGcsUri(gcsUri: string): { bucket: string, path: string } {
+    if (!gcsUri.startsWith("gs://")) {
+        throw new Error(`Invalid GCS URI: ${gcsUri}`)
+    }
+    const raw = gcsUri.slice(5)
+    const firstSlash = raw.indexOf("/")
+    if (firstSlash <= 0) {
+        throw new Error(`Invalid GCS URI: ${gcsUri}`)
+    }
+    const bucket = raw.slice(0, firstSlash)
+    const path = raw.slice(firstSlash + 1)
+    if (!path) {
+        throw new Error(`Invalid GCS URI: ${gcsUri}`)
+    }
+    return { bucket, path }
+}
 
 export async function getSignedUploadUrl({ fileName, contentType }: { fileName: string, contentType: string }) {
     'use server'
@@ -48,6 +91,8 @@ export async function createSourceAndTrigger(subjectId: string, title: string, g
 
 export async function createSourceFromGeminiFile(subjectId: string, title: string, geminiFileUri: string) {
     'use server'
+    const safeSubjectId = assertUuid(subjectId, "subjectId")
+    const safeTitle = (title || "").trim() || "Textbook"
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
@@ -59,9 +104,9 @@ export async function createSourceFromGeminiFile(subjectId: string, title: strin
 
     const { data: source, error } = await supabase.from('sources').insert({
         user_id: user.id,
-        subject_id: subjectId,
+        subject_id: safeSubjectId,
         kind: 'textbook',
-        title,
+        title: safeTitle,
         gcs_pdf_url: geminiFileUri,
         ingest_status: 'succeeded'
     }).select().single()
@@ -71,13 +116,15 @@ export async function createSourceFromGeminiFile(subjectId: string, title: strin
         throw new Error("Failed to create source record")
     }
 
-    revalidatePath(`/dashboard/${subjectId}`)
+    revalidatePath(`/dashboard/${safeSubjectId}`)
 
     return { success: true, sourceId: source.source_id }
 }
 
 export async function createSessionAndTrigger(subjectId: string, title: string, gcsPath: string) {
     'use server'
+    const safeSubjectId = assertUuid(subjectId, "subjectId")
+    parseGcsUri(gcsPath)
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     
@@ -86,7 +133,7 @@ export async function createSessionAndTrigger(subjectId: string, title: string, 
     // 1. Insert Session
     const { data: session, error: sessError } = await supabase.from('sessions').insert({
         user_id: user.id,
-        subject_id: subjectId,
+        subject_id: safeSubjectId,
         exam_window: 'midterm', // Default for test
         gcs_audio_url: gcsPath,
         status: 'queued'
@@ -100,24 +147,12 @@ export async function createSessionAndTrigger(subjectId: string, title: string, 
     // 3. Trigger Job Phase 2 (Splitter Mode)
     // The splitter will handle chunk creation and dispatching worker jobs
     try {
-        const runClient = new JobsClient();
-        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
-        
-        await runClient.runJob({
-            name: jobName,
-            overrides: {
-                containerOverrides: [
-                    {
-                        args: ['--phase', 'split', '--job-payload', JSON.stringify({
-                            session_id: session.session_id,
-                            gcs_audio_url: gcsPath,
-                            subject: title,
-                            exam_window: 'midterm'
-                        })]
-                    }
-                ]
-            }
-        });
+        await runThunderJob(['--phase', 'split', '--job-payload', JSON.stringify({
+            session_id: session.session_id,
+            gcs_audio_url: gcsPath,
+            subject: title,
+            exam_window: 'midterm'
+        })])
         
         console.log(`Triggered Splitter Job for session ${session.session_id}`);
     } catch (jobError) {
@@ -125,23 +160,54 @@ export async function createSessionAndTrigger(subjectId: string, title: string, 
         throw new Error("Failed to start processing job.");
     }
 
-    revalidatePath(`/dashboard/${subjectId}`)
+    revalidatePath(`/dashboard/${safeSubjectId}`)
     return { success: true }
 }
 
 export async function deleteSourceItem(id: string, type: 'pdf' | 'audio') {
     'use server'
+    const safeId = assertUuid(id, "id")
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) throw new Error("Unauthorized")
 
     try {
         if (type === 'pdf') {
-            await supabase.from('sources').delete().eq('source_id', id).eq('user_id', user.id)
-            // Note: Consider deleting from GCS too if needed, but keeping it simple for DB sync first
+            const { data: source } = await supabase
+                .from('sources')
+                .select('gcs_pdf_url')
+                .eq('source_id', safeId)
+                .eq('user_id', user.id)
+                .single()
+
+            await supabase.from('sources').delete().eq('source_id', safeId).eq('user_id', user.id)
+
+            if (source?.gcs_pdf_url) {
+                try {
+                    const target = parseGcsUri(source.gcs_pdf_url)
+                    await storage.bucket(target.bucket).file(target.path).delete()
+                } catch (gcsErr) {
+                    console.warn("PDF asset delete failed (continuing):", gcsErr)
+                }
+            }
         } else {
-            // Deleting sessions will cascade delete audio_chunks etc due to DB constraints usually
-            await supabase.from('sessions').delete().eq('session_id', id).eq('user_id', user.id)
+            const { data: session } = await supabase
+                .from('sessions')
+                .select('gcs_audio_url')
+                .eq('session_id', safeId)
+                .eq('user_id', user.id)
+                .single()
+
+            await supabase.from('sessions').delete().eq('session_id', safeId).eq('user_id', user.id)
+
+            if (session?.gcs_audio_url) {
+                try {
+                    const target = parseGcsUri(session.gcs_audio_url)
+                    await storage.bucket(target.bucket).file(target.path).delete()
+                } catch (gcsErr) {
+                    console.warn("Audio asset delete failed (continuing):", gcsErr)
+                }
+            }
         }
         revalidatePath(`/dashboard`) 
         // Revalidate specific path too if we had subjectId passed, but dashboard parent might be enough depending on structure? 
@@ -157,38 +223,104 @@ export async function deleteSourceItem(id: string, type: 'pdf' | 'audio') {
 
 export async function createReportJob(subjectId: string, sessionIds: string[]) {
     'use server'
+    const safeSubjectId = assertUuid(subjectId, "subjectId")
+    const safeSessionIds = assertUuidList(sessionIds, "sessionIds")
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     
     if (!user) throw new Error("Unauthorized")
-    if (!sessionIds || sessionIds.length === 0) throw new Error("No sessions selected")
+    const { data: sessions, error: sessErr } = await supabase
+        .from('sessions')
+        .select('session_id, status')
+        .in('session_id', safeSessionIds)
+        .eq('user_id', user.id)
+
+    if (sessErr) {
+        throw new Error("Failed to validate session status")
+    }
+    if (!sessions || sessions.length !== safeSessionIds.length) {
+        throw new Error("Some selected sessions were not found or are not accessible")
+    }
+
+    const allowed = new Set(["reasoning", "completed"])
+    const blocked = (sessions || []).filter(s => !allowed.has(s.status)).map(s => `${s.session_id}:${s.status}`)
+    if (blocked.length > 0) {
+        throw new Error(`Sessions not ready for report: ${blocked.join(", ")}`)
+    }
 
     // 1. Trigger Cloud Run Job (Phase 4 - Aggregate Reasoning)
     try {
-        const runClient = new JobsClient();
-        const jobName = `projects/pdf-lab-468815/locations/asia-northeast3/jobs/thunder-worker`;
+        await runThunderJob(['--phase', '4', '--job-payload', JSON.stringify({
+            subject_id: subjectId,
+            session_ids: safeSessionIds,
+            exam_window: 'midterm' // Could be passed from UI
+        })])
         
-        await runClient.runJob({
-            name: jobName,
-            overrides: {
-                containerOverrides: [
-                    {
-                        args: ['--phase', '4', '--job-payload', JSON.stringify({
-                            subject_id: subjectId,
-                            session_ids: sessionIds,
-                            exam_window: 'midterm' // Could be passed from UI
-                        })]
-                    }
-                ]
-            }
-        });
-        
-        console.log(`Triggered Report Job for subject ${subjectId} with sessions: ${sessionIds.length}`);
+        console.log(`Triggered Report Job for subject ${safeSubjectId} with sessions: ${safeSessionIds.length}`);
     } catch (jobError) {
         console.error("Failed to trigger Report Job:", jobError);
         throw new Error("Failed to start createReportJob.");
     }
     
-    revalidatePath(`/dashboard/${subjectId}`)
+    revalidatePath(`/dashboard/${safeSubjectId}`)
+    return { success: true }
+}
+
+export async function retrySourceItem(id: string, type: 'pdf' | 'audio') {
+    'use server'
+    const safeId = assertUuid(id, "id")
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("Unauthorized")
+
+    if (type === 'pdf') {
+        const { data: source, error } = await supabase
+            .from('sources')
+            .select('source_id, subject_id, gcs_pdf_url')
+            .eq('source_id', safeId)
+            .eq('user_id', user.id)
+            .single()
+        if (error || !source) throw new Error("Source not found")
+        if (!source.gcs_pdf_url) throw new Error("Source has no GCS PDF URL")
+
+        const { error: updateError } = await supabase
+            .from('sources')
+            .update({ ingest_status: 'queued', page_count: null })
+            .eq('source_id', safeId)
+            .eq('user_id', user.id)
+        if (updateError) throw new Error("Failed to reset source status")
+
+        await runThunderJob(['--phase', '1', '--job-payload', JSON.stringify({
+            source_id: source.source_id,
+            gcs_pdf_url: source.gcs_pdf_url
+        })])
+        revalidatePath(`/dashboard/${source.subject_id}`)
+        return { success: true }
+    }
+
+    const { data: session, error: sessErr } = await supabase
+        .from('sessions')
+        .select('session_id, subject_id, gcs_audio_url, exam_window')
+        .eq('session_id', safeId)
+        .eq('user_id', user.id)
+        .single()
+    if (sessErr || !session) throw new Error("Session not found")
+    if (!session.gcs_audio_url) throw new Error("Session has no GCS audio URL")
+
+    // Clean previous run artifacts for this session.
+    await supabase.from('session_reports').delete().eq('session_id', safeId)
+    await supabase.from('evidence_candidates').delete().eq('session_id', safeId)
+    await supabase.from('audio_chunks').delete().eq('session_id', safeId)
+    await supabase.from('sessions').update({ status: 'queued', logs: [] }).eq('session_id', safeId).eq('user_id', user.id)
+
+    const subjectLabel = session.gcs_audio_url.split('/').pop() || 'Audio'
+    await runThunderJob(['--phase', 'split', '--job-payload', JSON.stringify({
+        session_id: session.session_id,
+        gcs_audio_url: session.gcs_audio_url,
+        subject: subjectLabel,
+        exam_window: session.exam_window || 'midterm'
+    })])
+
+    revalidatePath(`/dashboard/${session.subject_id}`)
     return { success: true }
 }

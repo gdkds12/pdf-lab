@@ -1,8 +1,8 @@
 'use client'
 
-import { Plus, FileText, Upload, MoreVertical, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2, BookOpenCheck } from "lucide-react"
-import { useState, useRef, useEffect, useMemo } from "react"
-import { getSignedUploadUrl, createSourceFromGeminiFile, createSessionAndTrigger, createReportJob, deleteSourceItem } from "../actions"
+import { Plus, FileText, FileAudio, CheckCircle2, AlertCircle, Loader2, Play, Trash2, BookOpenCheck, RotateCcw } from "lucide-react"
+import { useState, useRef, useEffect } from "react"
+import { getSignedUploadUrl, createSourceFromGeminiFile, createSessionAndTrigger, createReportJob, deleteSourceItem, retrySourceItem } from "../actions"
 import { createClient } from "@/utils/supabase/client"
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js"
 import ReportViewerModal from "./ReportViewerModal"
@@ -221,6 +221,30 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       } catch (e) {
           alert("삭제 중 오류가 발생했습니다.")
           // Rollback if needed (simplified here)
+      }
+  }
+
+  const handleRetry = async (id: string, type: 'pdf' | 'audio') => {
+      if (!confirm("실패한 작업을 다시 실행할까요?")) return
+
+      setItems(prev => prev.map(item => {
+          if (item.id === id) {
+              return { ...item, status: 'queued' }
+          }
+          return item
+      }))
+
+      try {
+          await retrySourceItem(id, type)
+      } catch (e) {
+          console.error(e)
+          alert("재실행 중 오류가 발생했습니다.")
+          setItems(prev => prev.map(item => {
+              if (item.id === id) {
+                  return { ...item, status: 'failed' }
+              }
+              return item
+          }))
       }
   }
   
@@ -487,9 +511,19 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
 
                             {/* Actions Row (Hover only) */}
                             <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-white/90 backdrop-blur rounded px-1 shadow-sm border border-gray-100">
+                                {item.status === 'failed' && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleRetry(item.id, item.type); }}
+                                        className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-indigo-600 transition-colors"
+                                        title="실패 작업 재실행"
+                                    >
+                                        <RotateCcw className="h-3 w-3" />
+                                    </button>
+                                )}
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.type); }}
                                     className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded"
+                                    title="항목 삭제"
                                 >
                                     <Trash2 className="h-3 w-3" />
                                 </button>

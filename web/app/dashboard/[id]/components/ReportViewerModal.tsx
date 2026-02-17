@@ -15,6 +15,7 @@ interface ReportViewerModalProps {
 }
 
 type ReportData = {
+    warnings?: string[]
     professor_mentioned: ReportItem[]
     likely: ReportItem[]
     trap_warnings: ReportItem[]
@@ -96,6 +97,16 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                         </div>
                     ) : report ? (
                         <div className="space-y-8 max-w-3xl mx-auto">
+                            {report.warnings && report.warnings.length > 0 && (
+                                <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                                    <h3 className="text-sm font-semibold text-amber-800">검증/보호 안내</h3>
+                                    <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                                        {report.warnings.map((w, idx) => (
+                                            <li key={idx}>- {w}</li>
+                                        ))}
+                                    </ul>
+                                </section>
+                            )}
                             
                             {/* Section 1: Professor Mentioned (High Priority) */}
                             <section>

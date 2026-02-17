@@ -12,3 +12,4 @@ pydub
 google-cloud-run
 google-genai
 json_repair
+jsonschema>=4.18.0

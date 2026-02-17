@@ -5,16 +5,87 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
-import difflib
 
 from google import genai
 from google.genai import types
+from jsonschema import Draft202012Validator
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.validation import parse_payload, require_uuid, require_uuid_list
 from src.phase3.retrieval_pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
+
+REPORT_ITEM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["title", "why", "confidence", "audio_refs", "citations"],
+    "properties": {
+        "title": {"type": "string"},
+        "why": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "audio_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["audio_chunk_id", "t0_sec", "t1_sec", "signal_id"],
+                "properties": {
+                    "audio_chunk_id": {"type": "string"},
+                    "t0_sec": {"type": "number", "minimum": 0.0},
+                    "t1_sec": {"type": "number", "minimum": 0.0},
+                    "signal_id": {"type": "string"}
+                }
+            }
+        },
+        "citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["source_id", "page_start", "page_end", "anchor_path", "chunk_id"],
+                "properties": {
+                    "source_id": {"type": ["string", "null"]},
+                    "page_start": {"type": ["integer", "null"]},
+                    "page_end": {"type": ["integer", "null"]},
+                    "anchor_path": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"}
+                    },
+                    "chunk_id": {"type": "string"},
+                    "reason": {"type": ["string", "null"]}
+                }
+            }
+        }
+    }
+}
+
+FINAL_REPORT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["professor_mentioned", "likely", "trap_warnings", "warnings"],
+    "properties": {
+        "warnings": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "professor_mentioned": {
+            "type": "array",
+            "items": REPORT_ITEM_SCHEMA
+        },
+        "likely": {
+            "type": "array",
+            "items": REPORT_ITEM_SCHEMA
+        },
+        "trap_warnings": {
+            "type": "array",
+            "items": REPORT_ITEM_SCHEMA
+        }
+    }
+}
 
 class ReasoningPipeline:
     def __init__(self, session_ids: List[str], subject_id: str, exam_window: str = "midterm"):
@@ -23,6 +94,7 @@ class ReasoningPipeline:
         self.exam_window = exam_window
         self.logs_buffer = []
         self.supabase = get_supabase_client()
+        self.final_report_validator = Draft202012Validator(FINAL_REPORT_SCHEMA)
         # Initialize Google GenAI Client for Gemini 3.0 Thinking Mode
         # Use GEMINI_LOCATION (e.g. us-central1) specifically for Thinking Mode availability
         self.client = genai.Client(vertexai=True, project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
@@ -58,10 +130,18 @@ class ReasoningPipeline:
                 self._save_empty_report()
                 return
 
-            # Check if evidence exists. If not, trigger Lazy Retrieval (Phase 3)
-            if not evidence_candidates and signals:
-                self._log("No evidence candidates found. Triggering Phase 3 (Retrieval) automatically...")
-                for sid in self.session_ids:
+            # Trigger retrieval for sessions that still have no evidence.
+            evidence_count_by_session: Dict[str, int] = defaultdict(int)
+            for candidate in evidence_candidates:
+                sid = candidate.get("session_id")
+                if sid:
+                    evidence_count_by_session[sid] += 1
+
+            missing_sessions = [sid for sid in self.session_ids if evidence_count_by_session.get(sid, 0) == 0]
+
+            if missing_sessions and signals:
+                self._log(f"Missing evidence for {len(missing_sessions)} sessions. Triggering Phase 3 retrieval...")
+                for sid in missing_sessions:
                     try:
                         self._log(f"Running Retrieval for session {sid}...")
                         rp = RetrievalPipeline(session_id=sid)
@@ -92,7 +172,11 @@ class ReasoningPipeline:
             
             # 6. Validation & Post-processing
             self._log("Validating and cleaning generated report...")
-            final_report = self._validate_and_clean_report(report_json, chunks_map)
+            final_report = self._validate_and_clean_report(report_json, chunks_map, signals)
+            if Config.PHASE4_STRICT_SCHEMA:
+                self._enforce_final_report_schema(final_report)
+            metrics = self._compute_phase4_metrics(final_report, signals, evidence_candidates, chunks_map)
+            self._log(f"Phase4 metrics: {json.dumps(metrics, ensure_ascii=False)}")
             
             # 7. Save Report (Virtual 'All Sessions' Report)
             # Strategy: To make frontend queries simple, we save the SAME report to ALL participating sessions.
@@ -157,12 +241,28 @@ class ReasoningPipeline:
         context = f"## Exam Session Info\n"
         context += f"- Subject: {meta.get('subject_name')}\n"
         context += f"- Exam Window: {meta.get('exam_window')}\n"
-        context += f"- Audio URL: {meta.get('gcs_audio_url')}\n\n"
+        context += f"- Sessions: {len(self.session_ids)}\n\n"
         
         # B. Signals Timeline
         context += "## Audio Signals Timeline\n"
         for s in signals:
-            line = f"[#SIGNAL id={s['signal_id']} t={s['chunk_index']}:{s['t0_sec']:.1f}-{s['t1_sec']:.1f} type={s['signal_type']}] {s['content']}"
+            signal_id = s.get("signal_id", "unknown")
+            chunk_index = s.get("chunk_index")
+            if chunk_index is None:
+                chunk_index = "na"
+            t0_raw = s.get("t0_sec", 0.0)
+            t1_raw = s.get("t1_sec", 0.0)
+            try:
+                t0 = float(t0_raw if t0_raw is not None else 0.0)
+            except (TypeError, ValueError):
+                t0 = 0.0
+            try:
+                t1 = float(t1_raw if t1_raw is not None else 0.0)
+            except (TypeError, ValueError):
+                t1 = 0.0
+            signal_type = s.get("signal_type", "likely")
+            content = s.get("content", "")
+            line = f"[#SIGNAL id={signal_id} t={chunk_index}:{t0:.1f}-{t1:.1f} type={signal_type}] {content}"
             context += line + "\n"
         context += "\n"
         
@@ -174,8 +274,6 @@ class ReasoningPipeline:
         
         # Sort chunks possibly? By page_num if available?
         # Let's simple dump.
-        
-        used_chunk_ids = set()
         
         # Group candidates by chunk_id to maybe show relevance score? 
         # Simplest: just dump content.
@@ -190,6 +288,17 @@ class ReasoningPipeline:
         return context
 
     def _call_gemini_reasoning(self, prompt_context: str) -> Dict:
+        response_schema = {
+            "type": "object",
+            "properties": {
+                "warnings": {"type": "array", "items": {"type": "string"}},
+                "professor_mentioned": {"type": "array"},
+                "likely": {"type": "array"},
+                "trap_warnings": {"type": "array"}
+            },
+            "required": ["professor_mentioned", "likely", "trap_warnings"]
+        }
+
         system_prompt = """
 [ROLE]
 You are the "Grand Master" TA for an exam preparation service.
@@ -227,6 +336,8 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 - If a signal has NO matching textbook reference but is very explicit in audio, keep it but note "Textbook reference missing" in 'why'.
 - If a Reference Block is not relevant to any signal, ignore it.
 - Use EXACT chunk_ids from input in citations.
+- Keep the report paraphrased. Do not copy long textbook sentences verbatim.
+- Never output raw textbook passages.
 - Return VALID JSON only.
 - **IMPORTANT**: Write the report entirely in KOREAN (한국어). The 'title' and 'why' fields MUST be in Korean.
 - **STYLE**: In the 'why' field, write natural sentences. **NEVER** include raw Signal IDs or Chunk IDs (e.g., "(id:f3c...)", "(CHUNK id=...)") in the text. Citing them in 'audio_refs' or 'citations' array is enough.
@@ -240,7 +351,8 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                 contents=prompt_context,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    response_mime_type="application/json"
+                    response_mime_type="application/json",
+                    response_schema=response_schema
                 )
             )
             
@@ -253,22 +365,14 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 
         except Exception as e:
             logger.error(f"Gemini Call Failed: {e}")
-            raise e            
-            return json.loads(response.text)
-            
-        except Exception as e:
-            logger.error(f"Gemini 3.0 Call Failed: {e}")
-            # Fallback or re-raise? Phase 4 is critical, so failing might be better than empty.
-            if hasattr(e, 'response'):
-                 logger.error(f"Response content: {e.response.text}")
-            
-            # Minimal fallback for stability
-            return {"professor_mentioned": [], "likely": [], "trap_warnings": [], "error": str(e)}
+            raise e
 
-    def _validate_and_clean_report(self, report: Dict, chunks_map: Dict) -> Dict:
+    def _validate_and_clean_report(self, report: Dict, chunks_map: Dict, signals: List[Dict]) -> Dict:
         # Basic schema check and hallucination filter
         valid_keys = ["professor_mentioned", "likely", "trap_warnings"]
         cleaned = {k: [] for k in valid_keys}
+        warnings: List[str] = []
+        signal_map = {s["signal_id"]: s for s in signals if s.get("signal_id")}
         
         # Regex to strip (id:...) or (CHUNK id=...) from text
         # Patterns: 
@@ -284,58 +388,193 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             if not isinstance(items, list): continue
             
             for item in items:
-                # Ensure citations list exists
-                if "citations" not in item:
-                    item["citations"] = []
-                
-                # 0. Extract & Clean Text (Why field)
-                if "why" in item and isinstance(item["why"], str):
-                    text = item["why"]
-                    
-                    # Extract explicitly mentioned IDs in text and auto-add to citations
-                    found_ids = []
-                    found_ids.extend(id_pattern.findall(text))
-                    found_ids.extend(chunk_pattern.findall(text))
-                    
-                    for fid in found_ids:
-                        # Check if this ID is already in citations
-                        exists = any(c.get("chunk_id") == fid for c in item["citations"])
-                        if not exists and fid in chunks_map:
-                            item["citations"].append({"chunk_id": fid, "reason": "Mentioned in explanation"})
+                title = item.get("title")
+                why = item.get("why")
+                if not isinstance(title, str) or not isinstance(why, str):
+                    warnings.append(f"{key}: title/why 누락으로 항목 제외")
+                    continue
 
-                    # Remove raw IDs from text
-                    text = id_pattern.sub('', text)
-                    text = chunk_pattern.sub('', text)
-                    # Clean up double spaces or trailing punctuation often left behind
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    item["why"] = text
+                raw_citations = item.get("citations", [])
+                if not isinstance(raw_citations, list):
+                    raw_citations = []
+
+                found_ids = []
+                found_ids.extend(id_pattern.findall(why))
+                found_ids.extend(chunk_pattern.findall(why))
+                why = id_pattern.sub("", why)
+                why = chunk_pattern.sub("", why)
+
+                title = " ".join(title.strip().split())[:Config.PHASE4_MAX_TITLE_LEN]
+                why = " ".join(why.strip().split())[:Config.PHASE4_MAX_WHY_LEN]
 
                 # 1. Check Confidence
                 conf = item.get("confidence", 0)
-                if conf < 0.3: continue # Filter low confidence
+                if not isinstance(conf, (int, float)) or conf < 0.3:
+                    continue
+                conf = float(max(0.0, min(1.0, conf)))
                 
-                # 2. Verify Citations (Hallucination Check)
+                # 2. Verify Audio References
+                valid_audio_refs = []
+                audio_refs = item.get("audio_refs", [])
+                if isinstance(audio_refs, list):
+                    for ref in audio_refs:
+                        if not isinstance(ref, dict):
+                            continue
+                        signal_id = ref.get("signal_id")
+                        signal_row = signal_map.get(signal_id)
+                        if not signal_row:
+                            continue
+
+                        t0 = ref.get("t0_sec", signal_row.get("t0_sec"))
+                        t1 = ref.get("t1_sec", signal_row.get("t1_sec"))
+                        if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
+                            continue
+                        if t0 < 0 or t1 < 0 or t0 > t1:
+                            continue
+
+                        valid_audio_refs.append({
+                            "signal_id": signal_id,
+                            "audio_chunk_id": ref.get("audio_chunk_id", signal_row.get("audio_chunk_id")),
+                            "t0_sec": float(t0),
+                            "t1_sec": float(t1)
+                        })
+                valid_audio_refs = valid_audio_refs[:Config.PHASE4_MAX_AUDIO_REFS]
+
+                # 3. Verify Citations (Hallucination Check)
                 valid_citations = []
-                citations = item.get("citations", [])
-                for cit in citations:
-                    cid = cit.get("chunk_id")
-                    if cid and cid in chunks_map:
-                        # Append page metadata to citation for frontend convenience
-                        chunk = chunks_map[cid]
-                        cit["page_start"] = chunk.get("page_start")
-                        cit["page_end"] = chunk.get("page_end")
-                        # Add a short snippet (e.g., first 100 chars) or the matched text if available (Gemini doesn't return matched text, just chunk_id)
-                        # Let's take the first 50 chars of the content
-                        full_text = chunk.get("content_text", "")
-                        cit["snippet"] = full_text[:60] + "..." if len(full_text) > 60 else full_text
-                        valid_citations.append(cit)
-                
-                item["citations"] = valid_citations
-                
-                # 3. Add to cleaned list
-                cleaned[key].append(item)
-                
+                citations = list(raw_citations)
+                for fid in found_ids:
+                    exists = any(isinstance(c, dict) and c.get("chunk_id") == fid for c in citations)
+                    if not exists and fid in chunks_map:
+                        citations.append({"chunk_id": fid, "reason": "설명 텍스트에서 참조 감지"})
+
+                if isinstance(citations, list):
+                    for cit in citations:
+                        if not isinstance(cit, dict):
+                            continue
+                        cid = cit.get("chunk_id")
+                        if cid and cid in chunks_map:
+                            chunk = chunks_map[cid]
+                            valid_citations.append({
+                                "chunk_id": cid,
+                                "reason": self._sanitize_reason(cit.get("reason"), chunks_map),
+                                "source_id": chunk.get("source_id"),
+                                "page_start": chunk.get("page_start"),
+                                "page_end": chunk.get("page_end"),
+                                "anchor_path": chunk.get("anchor_path")
+                            })
+                valid_citations = valid_citations[:Config.PHASE4_MAX_CITATIONS]
+
+                if len(valid_audio_refs) == 0 or len(valid_citations) == 0:
+                    warnings.append(f"{key}: 오디오/교재 근거 불충분으로 항목 제외")
+                    continue
+
+                if self._contains_verbatim_span(why, chunks_map, Config.PHASE4_VERBATIM_WINDOW):
+                    why = "교재 핵심 개념 기반 요약입니다. 원문 직접 인용은 생략했습니다."
+                    warnings.append(f"{key}: 원문 인용 보호 규칙 적용(요약으로 대체)")
+
+                cleaned[key].append({
+                    "title": title,
+                    "why": why,
+                    "confidence": conf,
+                    "audio_refs": valid_audio_refs,
+                    "citations": valid_citations
+                })
+
+        cleaned["warnings"] = list(dict.fromkeys(warnings))
         return cleaned
+
+    def _contains_verbatim_span(self, text: str, chunks_map: Dict[str, Dict], window: int) -> bool:
+        normalized = " ".join(text.split())
+        if len(normalized) < window:
+            return False
+        step = max(1, window // 2)
+        for i in range(0, len(normalized) - window + 1, step):
+            span = normalized[i:i + window]
+            if len(span.strip()) < window:
+                continue
+            for chunk in chunks_map.values():
+                chunk_text = " ".join(str(chunk.get("content_text", "")).split())
+                if span in chunk_text:
+                    return True
+        return False
+
+    def _sanitize_reason(self, reason: Any, chunks_map: Dict[str, Dict]) -> Optional[str]:
+        if not isinstance(reason, str):
+            return None
+        cleaned = " ".join(reason.strip().split())
+        if not cleaned:
+            return None
+        if self._contains_verbatim_span(cleaned, chunks_map, Config.PHASE4_VERBATIM_WINDOW):
+            return "교재 핵심 문맥과 일치"
+        return cleaned[:160]
+
+    def _enforce_final_report_schema(self, report: Dict[str, Any]):
+        errors = sorted(self.final_report_validator.iter_errors(report), key=lambda err: list(err.path))
+        if not errors:
+            return
+        first_five = []
+        for err in errors[:5]:
+            path = "/".join(str(p) for p in err.path) or "$"
+            first_five.append(f"{path}: {err.message}")
+        message = "Final report schema validation failed: " + "; ".join(first_five)
+        raise ValueError(message)
+
+    def _compute_phase4_metrics(
+        self,
+        report: Dict[str, Any],
+        signals: List[Dict[str, Any]],
+        evidence_candidates: List[Dict[str, Any]],
+        chunks_map: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        categories = ["professor_mentioned", "likely", "trap_warnings"]
+        item_counts = {k: len(report.get(k, [])) for k in categories}
+        all_items: List[Dict[str, Any]] = []
+        for key in categories:
+            value = report.get(key, [])
+            if isinstance(value, list):
+                all_items.extend(value)
+
+        audio_refs_total = 0
+        citations_total = 0
+        unique_signal_refs = set()
+        unique_cited_chunks = set()
+        confidence_values = []
+        for item in all_items:
+            conf = item.get("confidence")
+            if isinstance(conf, (int, float)):
+                confidence_values.append(float(conf))
+
+            refs = item.get("audio_refs", [])
+            if isinstance(refs, list):
+                audio_refs_total += len(refs)
+                for ref in refs:
+                    if isinstance(ref, dict) and ref.get("signal_id"):
+                        unique_signal_refs.add(ref["signal_id"])
+
+            citations = item.get("citations", [])
+            if isinstance(citations, list):
+                citations_total += len(citations)
+                for citation in citations:
+                    if isinstance(citation, dict) and citation.get("chunk_id"):
+                        unique_cited_chunks.add(citation["chunk_id"])
+
+        avg_confidence = round(sum(confidence_values) / len(confidence_values), 4) if confidence_values else None
+        warnings_count = len(report.get("warnings", [])) if isinstance(report.get("warnings"), list) else 0
+
+        return {
+            "input_signals": len(signals),
+            "input_evidence_candidates": len(evidence_candidates),
+            "input_unique_chunks": len(chunks_map),
+            "output_items_total": len(all_items),
+            "output_item_counts": item_counts,
+            "output_audio_refs_total": audio_refs_total,
+            "output_citations_total": citations_total,
+            "output_unique_signal_refs": len(unique_signal_refs),
+            "output_unique_cited_chunks": len(unique_cited_chunks),
+            "output_avg_confidence": avg_confidence,
+            "warnings_count": warnings_count
+        }
 
     def _save_report(self, session_id: str, report: Dict):
         # Insert into session_reports
@@ -345,46 +584,42 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         }).execute()
 
     def _save_empty_report(self):
-        empty = {"professor_mentioned": [], "likely": [], "trap_warnings": [], "note": "No signals detected"}
-        # Save to the last session as representative
-        self._save_report(self.session_ids[-1], empty)
+        empty = {
+            "professor_mentioned": [],
+            "likely": [],
+            "trap_warnings": [],
+            "warnings": ["유효한 신호가 없어 리포트 항목이 생성되지 않았습니다."]
+        }
+        for sid in self.session_ids:
+            self._save_report(sid, empty)
         self.supabase.table("sessions").update({"status": "completed"}).in_("session_id", self.session_ids).execute()
 
 
 def run(payload_str: str):
     logger.info("Phase 4: Reasoning Pipeline Started (Multi-Session Mode)")
     try:
-        payload = json.loads(payload_str)
+        payload = parse_payload(payload_str)
         
         # Support both single session (legacy/fallback) and multi-session
-        session_ids = payload.get("session_ids")
+        session_ids = require_uuid_list(payload, "session_ids", fallback_key="session_id")
         subject_id = payload.get("subject_id")
         exam_window = payload.get("exam_window", "midterm")
         
-        # Legacy support
-        if not session_ids and payload.get("session_id"):
-            session_ids = [payload.get("session_id")]
-            # Fetch subject_id from session if not provided
-            # But pipeline now requires subject_id in init or fetch.
-            # Let's enforce new payload structure for safety or fetch it.
-            # Lazy fetch:
-            # We need subject_id.
-            
-        if not session_ids:
-             raise ValueError("Missing session_ids within payload")
-        
         # If subject_id missing, fetch from first session
-        if not subject_id:
-             # Just instantiate pipeline and let it fail or improving fetching?
-             # Let's require subject_id in payload for efficiency
-             pass
+        if subject_id:
+            subject_id = require_uuid(payload, "subject_id")
 
         if not subject_id:
              # Fallback fetch
              from src.shared.db import get_supabase_client
              sb = get_supabase_client()
-             s = sb.table("sessions").select("subject_id").eq("session_id", session_ids[0]).single().execute()
-             subject_id = s.data["subject_id"]
+             try:
+                 s = sb.table("sessions").select("subject_id").eq("session_id", session_ids[0]).single().execute()
+                 if not s.data or not s.data.get("subject_id"):
+                     raise ValueError(f"Session not found or missing subject_id: {session_ids[0]}")
+                 subject_id = s.data["subject_id"]
+             except Exception as exc:
+                 raise ValueError(f"Session lookup failed for session_id={session_ids[0]}") from exc
 
         pipeline = ReasoningPipeline(session_ids, subject_id, exam_window)
         pipeline.run()

@@ -12,12 +12,14 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.validation import parse_payload, require_gcs_uri, require_uuid
 
 logger = logging.getLogger(__name__)
 
 def process_chunk_internal(
     session_id: str,
     audio_chunk_id: str,
+    chunk_index: Optional[int],
     gcs_chunk_url: str,
     start_offset_sec: float,
     duration_sec: float,
@@ -83,17 +85,15 @@ def process_chunk_internal(
 
     if signals:
         try:
-            for sig in signals:
+            validated_signals = _validate_signals(signals, audio_chunk_id, chunk_index)
+            if not validated_signals:
+                logger.info(f"Chunk {audio_chunk_id}: No valid signals after server-side validation.")
+                return
+            for sig in validated_signals:
                 sig["session_id"] = session_id
-                # Adjust timestamps relative to original file
-                sig["t0_sec"] = sig.get("t0_sec", 0) + start_offset_sec
-                sig["t1_sec"] = sig.get("t1_sec", 0) + start_offset_sec
-                
-                if sig.get("audio_chunk_id") != audio_chunk_id:
-                    sig["audio_chunk_id"] = audio_chunk_id
 
-            data = supabase.table("signals").insert(signals).execute()
-            logger.info(f"Chunk {audio_chunk_id}: Inserted {len(data.data)} signals.")
+            data = supabase.table("signals").insert(validated_signals).execute()
+            logger.info(f"Chunk {audio_chunk_id}: Inserted {len(data.data)} signals. (raw={len(signals)})")
         except Exception as e:
             logger.error(f"Failed to insert signals for chunk {audio_chunk_id}: {e}")
             raise
@@ -103,16 +103,14 @@ def process_chunk_internal(
 
 def run(payload_str: str):
     logger.info("Phase 2: Audio Signal Extraction Started")
-    try:
-        payload = json.loads(payload_str)
-    except json.JSONDecodeError:
-        raise ValueError("Invalid JSON payload")
+    payload = parse_payload(payload_str)
 
     # Wrapper for single execution via CLI
     process_chunk_internal(
-        session_id=payload.get("session_id"),
-        audio_chunk_id=payload.get("audio_chunk_id"),
-        gcs_chunk_url=payload.get("gcs_chunk_url"),
+        session_id=require_uuid(payload, "session_id"),
+        audio_chunk_id=require_uuid(payload, "audio_chunk_id"),
+        chunk_index=payload.get("chunk_index"),
+        gcs_chunk_url=require_gcs_uri(payload, "gcs_chunk_url"),
         start_offset_sec=payload.get("start_offset_sec", 0),
         duration_sec=payload.get("duration_sec", 0),
         subject_name=payload.get("subject", "Unknown"),
@@ -348,3 +346,74 @@ Extract signals + search intent as specified.
         logger.error(f"Error during Gemini generation: {type(e).__name__}: {e}")
         logger.error(traceback.format_exc())
         raise
+
+
+def _normalize_search_queries(queries: Any) -> List[str]:
+    if not isinstance(queries, list):
+        return []
+    cleaned = []
+    seen = set()
+    for q in queries:
+        if not isinstance(q, str):
+            continue
+        nq = " ".join(q.strip().split())
+        if len(nq) < 2 or len(nq) > 120:
+            continue
+        key = nq.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(nq)
+    return cleaned
+
+
+def _validate_signals(raw_signals: List[Dict[str, Any]], audio_chunk_id: str, chunk_index: Optional[int]) -> List[Dict[str, Any]]:
+    valid_signal_types = {"hint", "likely", "trap"}
+    validated: List[Dict[str, Any]] = []
+
+    for sig in raw_signals:
+        signal_type = sig.get("signal_type")
+        if signal_type not in valid_signal_types:
+            continue
+
+        content = sig.get("content", "")
+        if not isinstance(content, str):
+            continue
+        content = " ".join(content.strip().split())
+        if not content:
+            continue
+        if len(content) > 200:
+            content = content[:200]
+
+        queries = _normalize_search_queries(sig.get("search_queries", []))
+        if len(queries) < 2:
+            continue
+        queries = queries[:6]
+
+        t0 = sig.get("t0_sec")
+        t1 = sig.get("t1_sec")
+        if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
+            continue
+        if t0 < 0 or t1 < 0 or t0 > t1:
+            continue
+
+        importance = sig.get("importance")
+        if not isinstance(importance, (int, float)):
+            importance = 0.5
+        importance = float(max(0.0, min(1.0, importance)))
+
+        cleaned = {
+            "signal_type": signal_type,
+            "content": content,
+            "search_queries": queries,
+            "audio_chunk_id": audio_chunk_id,
+            "t0_sec": float(t0),
+            "t1_sec": float(t1),
+            "importance": importance
+        }
+        if chunk_index is not None:
+            cleaned["chunk_index"] = int(chunk_index)
+
+        validated.append(cleaned)
+
+    return validated

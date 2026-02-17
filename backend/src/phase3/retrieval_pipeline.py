@@ -1,16 +1,15 @@
 ﻿import logging
-import json
 import concurrent.futures
 import sys
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict
 from collections import defaultdict
-import hashlib
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 from vertexai.language_models import TextEmbeddingModel
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.validation import parse_payload, require_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +45,12 @@ class RetrievalPipeline:
             for s in signals:
                 queries = s.get("search_queries", []) or []
                 for q in queries:
-                    # Normalize: trim, lowercase
-                    norm_q = q.strip()
-                    if len(norm_q) < 2: continue # skip garbage
+                    if not isinstance(q, str):
+                        continue
+                    # Normalize query text for stable deduplication.
+                    norm_q = " ".join(q.lower().strip().split())
+                    if len(norm_q) < 2 or len(norm_q) > 120:
+                        continue
                     query_map[norm_q].append(s["signal_id"])
             
             unique_queries = list(query_map.keys())
@@ -64,7 +66,7 @@ class RetrievalPipeline:
             
             # DB connection is HTTP (Supabase), so it handles concurrency well. 
             # But high concurrency with large payloads causes Protocol Errors (HTTP/2 flow control).
-            max_workers = 1
+            max_workers = max(1, Config.PHASE3_MAX_WORKERS)
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_query = {
                     executor.submit(self._search_rpc, q_text, q_vec): q_text
@@ -166,11 +168,8 @@ class RetrievalPipeline:
 def run(payload_str: str):
     logger.info("Phase 3: Retrieval Pipeline Started")
     try:
-        payload = json.loads(payload_str)
-        session_id = payload.get("session_id")
-        
-        if not session_id:
-             raise ValueError("Missing session_id in payload")
+        payload = parse_payload(payload_str)
+        session_id = require_uuid(payload, "session_id")
              
         pipeline = RetrievalPipeline(session_id)
         pipeline.run()
