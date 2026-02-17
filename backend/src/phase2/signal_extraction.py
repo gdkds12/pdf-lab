@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import random
 import subprocess
+import time
 import uuid
 import traceback
 from typing import List, Dict, Any, Optional
@@ -92,6 +94,8 @@ def process_chunk_internal(
             for sig in validated_signals:
                 sig["session_id"] = session_id
 
+            # Idempotency guard for retry paths.
+            supabase.table("signals").delete().eq("audio_chunk_id", audio_chunk_id).execute()
             data = supabase.table("signals").insert(validated_signals).execute()
             logger.info(f"Chunk {audio_chunk_id}: Inserted {len(data.data)} signals. (raw={len(signals)})")
         except Exception as e:
@@ -325,28 +329,60 @@ Extract signals + search intent as specified.
     logger.info(f"Using mime_type {mime_type} for file {gcs_uri}")
     audio_part = Part.from_uri(uri=gcs_uri, mime_type=mime_type)
     
-    try:
-        response = model.generate_content(
-            [system_instruction, audio_part, prompt],
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": response_schema,
-                "temperature": 0.2,
-                "max_output_tokens": 2048,
-                "frequency_penalty": 0.6,
-            }
-        )
-        
-        text = response.text
-        logger.info(f"Gemini Phase 2 Response: {text[:200]}...")
-        
-        data = json.loads(text)
-        return data.get("signals", [])
+    max_retries = max(1, Config.PHASE2_GEMINI_MAX_RETRIES)
+    retry_base_sec = max(0.5, float(Config.PHASE2_GEMINI_RETRY_BASE_SEC))
+    retry_max_sec = max(1.0, float(Config.PHASE2_GEMINI_RETRY_MAX_SEC))
 
-    except Exception as e:
-        logger.error(f"Error during Gemini generation: {type(e).__name__}: {e}")
-        logger.error(traceback.format_exc())
-        raise
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = model.generate_content(
+                [system_instruction, audio_part, prompt],
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "response_schema": response_schema,
+                    "temperature": 0.2,
+                    "max_output_tokens": 2048,
+                    "frequency_penalty": 0.6,
+                }
+            )
+            
+            text = response.text
+            logger.info(f"Gemini Phase 2 Response: {text[:200]}...")
+            
+            data = json.loads(text)
+            return data.get("signals", [])
+
+        except Exception as e:
+            if attempt < max_retries and _is_retryable_generation_error(e):
+                sleep_sec = min(retry_max_sec, retry_base_sec * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+                logger.warning(
+                    f"Transient Gemini error for chunk {audio_chunk_id}. "
+                    f"retrying in {sleep_sec:.1f}s ({attempt}/{max_retries}): {e}"
+                )
+                time.sleep(sleep_sec)
+                continue
+
+            logger.error(f"Error during Gemini generation: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
+            raise
+
+    return []
+
+
+def _is_retryable_generation_error(error: Exception) -> bool:
+    text = str(error).lower()
+    retry_tokens = (
+        "429",
+        "resource exhausted",
+        "rate limit",
+        "quota",
+        "deadline exceeded",
+        "timeout",
+        "service unavailable",
+        "temporarily unavailable",
+        "internal",
+    )
+    return any(token in text for token in retry_tokens)
 
 
 def _normalize_search_queries(queries: Any) -> List[str]:

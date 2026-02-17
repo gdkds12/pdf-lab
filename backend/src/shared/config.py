@@ -29,6 +29,12 @@ class Config:
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
     PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "1"))
+    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "4"))
+    PHASE2_CHUNK_MAX_RETRIES = int(os.getenv("PHASE2_CHUNK_MAX_RETRIES", "3"))
+    PHASE2_CHUNK_RETRY_BASE_SEC = float(os.getenv("PHASE2_CHUNK_RETRY_BASE_SEC", "2.0"))
+    PHASE2_GEMINI_MAX_RETRIES = int(os.getenv("PHASE2_GEMINI_MAX_RETRIES", "5"))
+    PHASE2_GEMINI_RETRY_BASE_SEC = float(os.getenv("PHASE2_GEMINI_RETRY_BASE_SEC", "2.0"))
+    PHASE2_GEMINI_RETRY_MAX_SEC = float(os.getenv("PHASE2_GEMINI_RETRY_MAX_SEC", "30.0"))
 
     # Guardrail / Compliance Settings
     DELETE_SOURCE_ASSETS_ON_SUCCESS = os.getenv("DELETE_SOURCE_ASSETS_ON_SUCCESS", "false").lower() in ("1", "true", "yes")

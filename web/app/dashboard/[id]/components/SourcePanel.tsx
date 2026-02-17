@@ -438,94 +438,129 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
 
     setNotice(null)
 
-    try {
-      setIsUploading(true)
-      let acceptedCount = 0
+    setIsUploading(true)
+    const acceptedFiles: File[] = []
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const isPdf = file.type === 'application/pdf'
+      const isAudio = file.type.startsWith('audio/')
+      if (isPdf || isAudio) acceptedFiles.push(file)
+    }
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        const isPdf = file.type === 'application/pdf'
-        const isAudio = file.type.startsWith('audio/')
+    if (acceptedFiles.length === 0) {
+      setNotice({ type: 'info', message: 'PDF 또는 오디오 파일만 업로드할 수 있습니다.' })
+      setIsUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
 
-        if (!isPdf && !isAudio) continue
-
-        acceptedCount += 1
-
-        if (isAudio) {
-          const fileName = `${subjectId}/${Date.now()}_${file.name}`
-          const { url, gcsPath } = await getSignedUploadUrl({
-            fileName,
-            contentType: file.type,
-          })
-
-          const uploadResponse = await fetch(url, {
-            method: 'PUT',
-            body: file,
-            headers: { 'Content-Type': file.type },
-          })
-
-          if (!uploadResponse.ok) {
-            throw new Error('오디오 업로드에 실패했습니다.')
-          }
-
-          await createSessionAndTrigger(subjectId, file.name, gcsPath)
-          continue
-        }
-
-        const sessionRes = await fetch('/api/gemini/upload-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-          }),
+    const processSingleFile = async (file: File) => {
+      const isAudio = file.type.startsWith('audio/')
+      if (isAudio) {
+        const safeName = file.name.replace(/[^\w.\-()\[\]\s가-힣]/g, "_")
+        const fileName = `${subjectId}/${Date.now()}_${crypto.randomUUID()}_${safeName}`
+        const { url, gcsPath } = await getSignedUploadUrl({
+          fileName,
+          contentType: file.type,
         })
 
-        if (!sessionRes.ok) {
-          const errorText = await sessionRes.text()
-          throw new Error(errorText || 'Gemini 업로드 세션 생성 실패')
-        }
-
-        const { uploadUrl } = (await sessionRes.json()) as { uploadUrl: string }
-
-        const uploadRes = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: {
-            'X-Goog-Upload-Command': 'upload, finalize',
-            'X-Goog-Upload-Offset': '0',
-            'Content-Type': file.type,
-          },
+        const uploadResponse = await fetch(url, {
+          method: 'PUT',
           body: file,
+          headers: { 'Content-Type': file.type },
         })
 
-        if (!uploadRes.ok) {
-          const errorText = await uploadRes.text()
-          throw new Error(errorText || 'Gemini 파일 업로드 실패')
+        if (!uploadResponse.ok) {
+          throw new Error(`${file.name}: 오디오 업로드 실패`)
         }
 
-        const uploadPayload = (await uploadRes.json()) as { file?: { uri?: string } }
-        const geminiFileUri = uploadPayload.file?.uri
-
-        if (!geminiFileUri) {
-          throw new Error('Gemini 파일 URI를 받지 못했습니다.')
-        }
-
-        await createSourceFromGeminiFile(subjectId, file.name, geminiFileUri)
+        await createSessionAndTrigger(subjectId, file.name, gcsPath)
+        return
       }
 
-      if (acceptedCount === 0) {
-        setNotice({ type: 'info', message: 'PDF 또는 오디오 파일만 업로드할 수 있습니다.' })
-      } else {
+      const sessionRes = await fetch('/api/gemini/upload-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+        }),
+      })
+
+      if (!sessionRes.ok) {
+        const errorText = await sessionRes.text()
+        throw new Error(`${file.name}: ${errorText || 'Gemini 업로드 세션 생성 실패'}`)
+      }
+
+      const { uploadUrl } = (await sessionRes.json()) as { uploadUrl: string }
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Command': 'upload, finalize',
+          'X-Goog-Upload-Offset': '0',
+          'Content-Type': file.type,
+        },
+        body: file,
+      })
+
+      if (!uploadRes.ok) {
+        const errorText = await uploadRes.text()
+        throw new Error(`${file.name}: ${errorText || 'Gemini 파일 업로드 실패'}`)
+      }
+
+      const uploadPayload = (await uploadRes.json()) as { file?: { uri?: string } }
+      const geminiFileUri = uploadPayload.file?.uri
+
+      if (!geminiFileUri) {
+        throw new Error(`${file.name}: Gemini 파일 URI를 받지 못했습니다.`)
+      }
+
+      await createSourceFromGeminiFile(subjectId, file.name, geminiFileUri)
+    }
+
+    type UploadResult = { fileName: string; ok: true } | { fileName: string; ok: false; error: string }
+    const results: UploadResult[] = []
+    const maxConcurrent = Math.min(3, acceptedFiles.length)
+    let cursor = 0
+
+    const workers = Array.from({ length: maxConcurrent }, async () => {
+      while (true) {
+        const index = cursor
+        cursor += 1
+        if (index >= acceptedFiles.length) return
+
+        const file = acceptedFiles[index]
+        try {
+          await processSingleFile(file)
+          results.push({ fileName: file.name, ok: true })
+        } catch (error) {
+          console.error(error)
+          const message = error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다.'
+          results.push({ fileName: file.name, ok: false, error: message })
+        }
+      }
+    })
+
+    try {
+      await Promise.all(workers)
+      const successCount = results.filter((r) => r.ok).length
+      const failed = results.filter((r): r is Extract<UploadResult, { ok: false }> => !r.ok)
+
+      if (failed.length === 0) {
         setNotice({
           type: 'success',
-          message: `${acceptedCount}개 파일 업로드 요청이 접수되었습니다. 처리 상태를 실시간으로 반영합니다.`,
+          message: `${successCount}개 파일 업로드 요청이 접수되었습니다. 처리 상태를 실시간으로 반영합니다.`,
+        })
+      } else {
+        const failedNames = failed.slice(0, 2).map((r) => r.fileName).join(', ')
+        const moreLabel = failed.length > 2 ? ` 외 ${failed.length - 2}개` : ''
+        setNotice({
+          type: successCount > 0 ? 'info' : 'error',
+          message: `성공 ${successCount}개, 실패 ${failed.length}개 (${failedNames}${moreLabel})`,
         })
       }
-    } catch (error) {
-      console.error(error)
-      const message = error instanceof Error ? error.message : '업로드 중 오류가 발생했습니다.'
-      setNotice({ type: 'error', message })
     } finally {
       setIsUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''

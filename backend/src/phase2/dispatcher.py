@@ -2,6 +2,9 @@ import logging
 import math
 import subprocess
 import concurrent.futures
+import os
+import tempfile
+import time
 import google.auth
 from google.auth.transport import requests as google_requests
 from typing import List, Dict, Any
@@ -58,8 +61,21 @@ def run(payload_str: str):
             "status": "pending" # Initial status
         })
     
-    result = supabase.table("audio_chunks").insert(chunks_to_process).execute()
-    created_chunks = result.data
+    # Idempotent write: same session can be retried safely without duplicate-key failures.
+    supabase.table("audio_chunks").upsert(chunks_to_process, on_conflict="session_id,chunk_index").execute()
+    created_chunks = (
+        supabase
+        .table("audio_chunks")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("chunk_index")
+        .execute()
+        .data
+    ) or []
+    if len(created_chunks) != num_chunks:
+        raise RuntimeError(
+            f"audio_chunks mismatch for session={session_id}. expected={num_chunks}, loaded={len(created_chunks)}"
+        )
     
     # 4. Update Session Status
     supabase.table("sessions").update({"status": "extracting"}).eq("session_id", session_id).execute()
@@ -118,19 +134,40 @@ def get_audio_duration(gcs_uri: str) -> float:
         signed_url = blob.generate_signed_url(expiration=timedelta(minutes=5))
 
 
-    cmd = [
-        "ffprobe", 
-        "-v", "error", 
-        "-show_entries", "format=duration", 
-        "-of", "default=noprint_wrappers=1:nokey=1", 
-        signed_url
-    ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
+        return _ffprobe_duration(signed_url)
     except Exception as e:
-        logger.error(f"Failed to get audio duration: {e}")
+        logger.warning(f"Primary duration probe failed for {gcs_uri}: {e}. Falling back to local probe.")
+
+    suffix = os.path.splitext(blob_name)[1] or ".audio"
+    fd, local_path = tempfile.mkstemp(prefix="dur_probe_", suffix=suffix)
+    os.close(fd)
+    try:
+        blob.download_to_filename(local_path)
+        return _ffprobe_duration(local_path)
+    except Exception as e:
+        logger.error(f"Failed to get audio duration with fallback: {e}")
         raise ValueError(f"Could not determine audio duration for {gcs_uri}")
+    finally:
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+
+
+def _ffprobe_duration(target: str) -> float:
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        target
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    raw = result.stdout.strip()
+    if not raw:
+        raise ValueError("ffprobe returned empty duration")
+    return float(raw)
 
 
 def process_chunks_locally(chunks: List[Dict], subject: str, exam_window: str):
@@ -142,27 +179,37 @@ def process_chunks_locally(chunks: List[Dict], subject: str, exam_window: str):
     processed_count = 0
 
     def process_one(chunk):
-        try:
-            signal_extraction.process_chunk_internal(
-                session_id=chunk["session_id"],
-                audio_chunk_id=chunk["chunk_id"],
-                chunk_index=chunk["chunk_index"],
-                gcs_chunk_url=chunk["gcs_chunk_url"],
-                start_offset_sec=chunk["start_offset_sec"],
-                duration_sec=chunk["duration_sec"],
-                subject_name=subject,
-                exam_window=exam_window
-            )
-            return (chunk["chunk_id"], True)
-        except Exception as e:
-            logger.error(f"Error processing chunk {chunk['chunk_id']}: {e}")
-            # Depending on policy, we might want to fail the whole session or continue partially.
-            # Continue for now.
-            return (chunk["chunk_id"], False)
+        max_attempts = max(1, Config.PHASE2_CHUNK_MAX_RETRIES)
+        base_delay = max(0.5, float(Config.PHASE2_CHUNK_RETRY_BASE_SEC))
+        for attempt in range(1, max_attempts + 1):
+            try:
+                signal_extraction.process_chunk_internal(
+                    session_id=chunk["session_id"],
+                    audio_chunk_id=chunk["chunk_id"],
+                    chunk_index=chunk["chunk_index"],
+                    gcs_chunk_url=chunk["gcs_chunk_url"],
+                    start_offset_sec=chunk["start_offset_sec"],
+                    duration_sec=chunk["duration_sec"],
+                    subject_name=subject,
+                    exam_window=exam_window
+                )
+                return (chunk["chunk_id"], True)
+            except Exception as e:
+                if attempt < max_attempts and _is_retryable_chunk_error(e):
+                    delay = min(30.0, base_delay * (2 ** (attempt - 1)))
+                    logger.warning(
+                        f"Retrying chunk {chunk['chunk_id']} in {delay:.1f}s "
+                        f"(attempt {attempt}/{max_attempts}) due to: {e}"
+                    )
+                    time.sleep(delay)
+                    continue
 
-    # Max workers: 50 threads. 
-    # Since ffmpeg copy is IO bound and Gemini is IO bound, 50 is safe on 2-4 vCPU.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                logger.error(f"Error processing chunk {chunk['chunk_id']}: {e}")
+                return (chunk["chunk_id"], False)
+
+    max_workers = max(1, min(len(chunks), int(Config.PHASE2_MAX_WORKERS)))
+    logger.info(f"Processing chunks with max_workers={max_workers}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_one, chunk) for chunk in chunks]
         for future in concurrent.futures.as_completed(futures):
             chunk_id, ok = future.result()
@@ -172,3 +219,19 @@ def process_chunks_locally(chunks: List[Dict], subject: str, exam_window: str):
                 failed_ids.append(chunk_id)
 
     return processed_count, failed_ids
+
+
+def _is_retryable_chunk_error(error: Exception) -> bool:
+    text = str(error).lower()
+    retry_tokens = (
+        "429",
+        "resource exhausted",
+        "rate limit",
+        "quota",
+        "timeout",
+        "deadline exceeded",
+        "unavailable",
+        "connection reset",
+        "temporarily unavailable",
+    )
+    return any(token in text for token in retry_tokens)

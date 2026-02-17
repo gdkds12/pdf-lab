@@ -17,12 +17,28 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 async function runThunderJob(args: string[]) {
     const runClient = new JobsClient()
-    await runClient.runJob({
-        name: jobName,
-        overrides: {
-            containerOverrides: [{ args }]
+    const maxAttempts = 3
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await runClient.runJob({
+                name: jobName,
+                overrides: {
+                    containerOverrides: [{ args }]
+                }
+            })
+            return
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            const retryable = /429|resource exhausted|quota|rate limit|timeout|unavailable|503/i.test(message)
+            if (!retryable || attempt === maxAttempts) {
+                throw error
+            }
+
+            const delayMs = Math.min(5000, 500 * (2 ** (attempt - 1)))
+            await new Promise((resolve) => setTimeout(resolve, delayMs))
         }
-    })
+    }
 }
 
 function assertUuid(value: string, fieldName: string): string {
