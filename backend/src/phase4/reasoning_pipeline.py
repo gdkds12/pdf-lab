@@ -17,15 +17,18 @@ from src.phase3.retrieval_pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
 
-REPORT_ITEM_SCHEMA = {
+QUEUE_ITEM_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["title", "why", "confidence", "audio_refs", "citations"],
+    "required": ["title", "why", "importance", "importance_score", "study_action", "proof_refs", "references"],
     "properties": {
+        "rank": {"type": "integer", "minimum": 1},
         "title": {"type": "string"},
         "why": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-        "audio_refs": {
+        "importance": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "importance_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "study_action": {"type": "string"},
+        "proof_refs": {
             "type": "array",
             "minItems": 1,
             "items": {
@@ -33,14 +36,15 @@ REPORT_ITEM_SCHEMA = {
                 "additionalProperties": False,
                 "required": ["audio_chunk_id", "t0_sec", "t1_sec", "signal_id"],
                 "properties": {
-                    "audio_chunk_id": {"type": "string"},
+                    "audio_chunk_id": {"type": ["string", "null"]},
                     "t0_sec": {"type": "number", "minimum": 0.0},
                     "t1_sec": {"type": "number", "minimum": 0.0},
-                    "signal_id": {"type": "string"}
+                    "signal_id": {"type": "string"},
+                    "note": {"type": ["string", "null"]}
                 }
             }
         },
-        "citations": {
+        "references": {
             "type": "array",
             "minItems": 1,
             "items": {
@@ -66,23 +70,15 @@ REPORT_ITEM_SCHEMA = {
 FINAL_REPORT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["professor_mentioned", "likely", "trap_warnings", "warnings"],
+    "required": ["recommendation_queue", "warnings"],
     "properties": {
         "warnings": {
             "type": "array",
             "items": {"type": "string"}
         },
-        "professor_mentioned": {
+        "recommendation_queue": {
             "type": "array",
-            "items": REPORT_ITEM_SCHEMA
-        },
-        "likely": {
-            "type": "array",
-            "items": REPORT_ITEM_SCHEMA
-        },
-        "trap_warnings": {
-            "type": "array",
-            "items": REPORT_ITEM_SCHEMA
+            "items": QUEUE_ITEM_SCHEMA
         }
     }
 }
@@ -181,7 +177,7 @@ class ReasoningPipeline:
             if metrics.get("output_items_total", 0) == 0:
                 final_report.setdefault("warnings", [])
                 final_report["warnings"].append(
-                    "리포트 항목이 모두 검증 단계에서 제외되었습니다. 1개 녹음 파일만 사용한 경우 근거가 부족할 수 있으니 2~3개 이상 업로드 후 다시 생성해 보세요."
+                    "추천 문제 큐 항목이 모두 검증 단계에서 제외되었습니다. 1개 녹음 파일만 사용한 경우 근거가 부족할 수 있으니 2~3개 이상 업로드 후 다시 생성해 보세요."
                 )
                 missing_signal_count = metrics.get("input_signals_without_evidence")
                 if isinstance(missing_signal_count, int) and missing_signal_count > 0:
@@ -249,9 +245,9 @@ class ReasoningPipeline:
 
     def _assemble_context(self, meta: Dict, signals: List[Dict], candidates: List[Dict], chunks_map: Dict) -> str:
         # A. Session Info
-        context = f"## Exam Session Info\n"
+        context = f"## Learning Session Info\n"
         context += f"- Subject: {meta.get('subject_name')}\n"
-        context += f"- Exam Window: {meta.get('exam_window')}\n"
+        context += f"- Exam Window Label: {meta.get('exam_window')}\n"
         context += f"- Sessions: {len(self.session_ids)}\n\n"
         
         # B. Signals Timeline
@@ -278,7 +274,7 @@ class ReasoningPipeline:
         context += "\n"
         
         # C. Evidence References (Textbook Chunks)
-        context += "## Textbook Reference Blocks\n"
+        context += "## Textbook Reference Blocks (for recommendation mapping)\n"
         # We need to filter which chunks are actually relevant. 
         # But Phase 3 already filtered them via candidates.
         # Just dump the unique chunks found in candidates.
@@ -303,55 +299,62 @@ class ReasoningPipeline:
             "type": "object",
             "properties": {
                 "warnings": {"type": "array", "items": {"type": "string"}},
-                "professor_mentioned": {"type": "array"},
-                "likely": {"type": "array"},
-                "trap_warnings": {"type": "array"}
+                "recommendation_queue": {"type": "array"}
             },
-            "required": ["professor_mentioned", "likely", "trap_warnings"]
+            "required": ["recommendation_queue"]
         }
 
         system_prompt = """
 [ROLE]
-You are the "Grand Master" TA for an exam preparation service.
-Your goal is to synthesize audio signals (professor's speech) and textbook references to create a high-quality exam preparation report.
+You are the "Grand Master" TA for a lecture-to-study workflow assistant.
+Your goal is to convert professor hints from lecture audio into actionable textbook practice recommendations with clear evidence.
 
 [INPUT]
-1. Session Info: Subject and exam scope.
-2. Signal Timeline: List of important signals detected in audio.
+1. Session Info: Subject and lecture scope.
+2. Signal Timeline: Important hints detected in audio.
 3. Reference Blocks: Textbook chunks retrieved based on signals.
 
 [TASK]
 1. Correlate audio signals with specific textbook chunks.
-2. Filter out signals that are repetitive or trivial.
-3. Classify remaining items into 3 categories:
-   - professor_mentioned: Explicitly emphasized by professor ("This will be on the exam", "Important").
-   - likely: High probability based on signal + matching textbook content.
-   - trap_warnings: Specific misconceptions or tricky points mentioned.
+2. Build ONE prioritized recommendation queue. (Do NOT output separate categories.)
+3. Each recommendation must include:
+   - what to study/solve (title),
+   - why it matters (why),
+   - suggested study action (study_action),
+   - importance (0.0~1.0),
+   - proof refs from audio with timestamps,
+   - textbook references.
+4. Remove low-confidence or repetitive items.
+5. Focus on recommendation quality, not exam prediction statements.
 
 [OUTPUT SCHEMA (JSON Only)]
 {
-  "professor_mentioned": [
+  "recommendation_queue": [
     {
-      "title": "Topic Name",
-      "why": "Explanation citing audio and text",
-      "confidence": 0.0-1.0,
-      "audio_refs": [{"signal_id": "..."}],
-      "citations": [{"chunk_id": "...", "reason": "..."}]
+      "title": "교재 문제/단원 식별 가능한 이름",
+      "why": "추천 근거 설명 (자연어)",
+      "study_action": "사용자가 바로 실행할 수 있는 학습 행동",
+      "importance": 0.0-1.0,
+      "proof_refs": [
+        {"signal_id":"...", "audio_chunk_id":"...", "t0_sec":0.0, "t1_sec":0.0, "note":"강조/함정/반복 등"}
+      ],
+      "references": [
+        {"chunk_id":"...", "reason":"교재 연결 근거"}
+      ]
     }
-  ],
-  "likely": [...],
-  "trap_warnings": [...]
+  ]
 }
 
 [CONSTRAINTS]
-- If a signal has NO matching textbook reference but is very explicit in audio, keep it but note "Textbook reference missing" in 'why'.
+- If a signal has NO matching textbook reference, drop it from queue and add warning.
 - If a Reference Block is not relevant to any signal, ignore it.
-- Use EXACT chunk_ids from input in citations.
+- Use EXACT chunk_ids from input in references.
 - Keep the report paraphrased. Do not copy long textbook sentences verbatim.
 - Never output raw textbook passages.
+- Never output "정답", "예상 문제 적중" 같은 표현.
 - Return VALID JSON only.
 - **IMPORTANT**: Write the report entirely in KOREAN (한국어). The 'title' and 'why' fields MUST be in Korean.
-- **STYLE**: In the 'why' field, write natural sentences. **NEVER** include raw Signal IDs or Chunk IDs (e.g., "(id:f3c...)", "(CHUNK id=...)") in the text. Citing them in 'audio_refs' or 'citations' array is enough.
+- **STYLE**: In 'why', write natural Korean sentences. Do NOT include raw IDs in sentence text.
 """
         # Call Gemini 3.0 Flash with Thinking Mode
         logger.info(f"Calling {Config.REASONING_MODEL_NAME} with Thinking Mode (HIGH) [DEBUG: {Config.REASONING_MODEL_NAME}]")
@@ -380,12 +383,12 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 
     def _validate_and_clean_report(self, report: Dict, chunks_map: Dict, signals: List[Dict]) -> Dict:
         # Basic schema check and hallucination filter
-        valid_keys = ["professor_mentioned", "likely", "trap_warnings"]
-        cleaned = {k: [] for k in valid_keys}
+        cleaned_queue: List[Dict[str, Any]] = []
         warnings: List[str] = []
         dropped_counts: Counter[str] = Counter()
         dropped_examples: List[str] = []
         signal_map = {s["signal_id"]: s for s in signals if s.get("signal_id")}
+        raw_items = self._extract_raw_queue_items(report)
         
         # Regex to strip (id:...) or (CHUNK id=...) from text
         # Patterns: 
@@ -396,123 +399,127 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         id_pattern = re.compile(r'\(?id:([\w-]+)\)?', re.IGNORECASE)
         chunk_pattern = re.compile(r'\(?CHUNK id=([\w-]+)\)?', re.IGNORECASE)
 
-        for key in valid_keys:
-            items = report.get(key, [])
-            if not isinstance(items, list): continue
-            
-            for item in items:
-                def _record_drop(reason: str):
-                    dropped_counts[reason] += 1
-                    if len(dropped_examples) >= 5:
-                        return
-                    raw_title = item.get("title")
-                    title_preview = str(raw_title).strip() if isinstance(raw_title, str) else "(제목 없음)"
-                    if not title_preview:
-                        title_preview = "(제목 없음)"
-                    if len(title_preview) > 32:
-                        title_preview = title_preview[:32] + "..."
-                    dropped_examples.append(f"{key}/{title_preview}: {reason}")
+        for item in raw_items:
+            def _record_drop(reason: str):
+                dropped_counts[reason] += 1
+                if len(dropped_examples) >= 5:
+                    return
+                raw_title = item.get("title")
+                title_preview = str(raw_title).strip() if isinstance(raw_title, str) else "(제목 없음)"
+                if not title_preview:
+                    title_preview = "(제목 없음)"
+                if len(title_preview) > 32:
+                    title_preview = title_preview[:32] + "..."
+                dropped_examples.append(f"{title_preview}: {reason}")
 
-                title = item.get("title")
-                why = item.get("why")
-                if not isinstance(title, str) or not isinstance(why, str):
-                    warnings.append(f"{key}: title/why 누락으로 항목 제외")
-                    _record_drop("title/why 누락")
-                    continue
+            title = item.get("title")
+            why = item.get("why")
+            if not isinstance(title, str) or not isinstance(why, str):
+                warnings.append("추천 항목: title/why 누락으로 제외")
+                _record_drop("title/why 누락")
+                continue
 
-                raw_citations = item.get("citations", [])
-                if not isinstance(raw_citations, list):
-                    raw_citations = []
+            raw_references = item.get("references", item.get("citations", []))
+            if not isinstance(raw_references, list):
+                raw_references = []
 
-                found_ids = []
-                found_ids.extend(id_pattern.findall(why))
-                found_ids.extend(chunk_pattern.findall(why))
-                why = id_pattern.sub("", why)
-                why = chunk_pattern.sub("", why)
+            found_ids = []
+            found_ids.extend(id_pattern.findall(why))
+            found_ids.extend(chunk_pattern.findall(why))
+            why = id_pattern.sub("", why)
+            why = chunk_pattern.sub("", why)
 
-                title = " ".join(title.strip().split())[:Config.PHASE4_MAX_TITLE_LEN]
-                why = " ".join(why.strip().split())[:Config.PHASE4_MAX_WHY_LEN]
+            title = " ".join(title.strip().split())[:Config.PHASE4_MAX_TITLE_LEN]
+            why = " ".join(why.strip().split())[:Config.PHASE4_MAX_WHY_LEN]
 
-                # 1. Check Confidence
-                conf = item.get("confidence", 0)
-                if not isinstance(conf, (int, float)) or conf < 0.3:
-                    _record_drop("confidence 0.3 미만")
-                    continue
-                conf = float(max(0.0, min(1.0, conf)))
-                
-                # 2. Verify Audio References
-                valid_audio_refs = []
-                audio_refs = item.get("audio_refs", [])
-                if isinstance(audio_refs, list):
-                    for ref in audio_refs:
-                        if not isinstance(ref, dict):
-                            continue
-                        signal_id = ref.get("signal_id")
-                        signal_row = signal_map.get(signal_id)
-                        if not signal_row:
-                            continue
+            importance = item.get("importance", item.get("confidence", 0))
+            if not isinstance(importance, (int, float)) or importance < 0.3:
+                _record_drop("importance 0.3 미만")
+                continue
+            importance = float(max(0.0, min(1.0, importance)))
+            importance_score = int(round(importance * 100))
 
-                        t0 = ref.get("t0_sec", signal_row.get("t0_sec"))
-                        t1 = ref.get("t1_sec", signal_row.get("t1_sec"))
-                        if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
-                            continue
-                        if t0 < 0 or t1 < 0 or t0 > t1:
-                            continue
+            study_action = item.get("study_action")
+            if not isinstance(study_action, str) or not study_action.strip():
+                study_action = "추천된 문제를 먼저 풀이하고 근거 구간을 다시 확인하세요."
+            study_action = " ".join(study_action.strip().split())[:140]
 
-                        valid_audio_refs.append({
-                            "signal_id": signal_id,
-                            "audio_chunk_id": ref.get("audio_chunk_id", signal_row.get("audio_chunk_id")),
-                            "t0_sec": float(t0),
-                            "t1_sec": float(t1)
+            valid_proof_refs = []
+            proof_refs = item.get("proof_refs", item.get("audio_refs", []))
+            if isinstance(proof_refs, list):
+                for ref in proof_refs:
+                    if not isinstance(ref, dict):
+                        continue
+                    signal_id = ref.get("signal_id")
+                    signal_row = signal_map.get(signal_id)
+                    if not signal_row:
+                        continue
+
+                    t0 = ref.get("t0_sec", signal_row.get("t0_sec"))
+                    t1 = ref.get("t1_sec", signal_row.get("t1_sec"))
+                    if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
+                        continue
+                    if t0 < 0 or t1 < 0 or t0 > t1:
+                        continue
+
+                    valid_proof_refs.append({
+                        "signal_id": signal_id,
+                        "audio_chunk_id": ref.get("audio_chunk_id", signal_row.get("audio_chunk_id")),
+                        "t0_sec": float(t0),
+                        "t1_sec": float(t1),
+                        "note": self._sanitize_reason(ref.get("note") or ref.get("reason"), chunks_map)
+                    })
+            valid_proof_refs = valid_proof_refs[:Config.PHASE4_MAX_AUDIO_REFS]
+
+            valid_references = []
+            references = list(raw_references)
+            for fid in found_ids:
+                exists = any(isinstance(c, dict) and c.get("chunk_id") == fid for c in references)
+                if not exists and fid in chunks_map:
+                    references.append({"chunk_id": fid, "reason": "설명 텍스트에서 참조 감지"})
+
+            if isinstance(references, list):
+                for ref in references:
+                    if not isinstance(ref, dict):
+                        continue
+                    cid = ref.get("chunk_id")
+                    if cid and cid in chunks_map:
+                        chunk = chunks_map[cid]
+                        valid_references.append({
+                            "chunk_id": cid,
+                            "reason": self._sanitize_reason(ref.get("reason"), chunks_map),
+                            "source_id": chunk.get("source_id"),
+                            "page_start": chunk.get("page_start"),
+                            "page_end": chunk.get("page_end"),
+                            "anchor_path": chunk.get("anchor_path")
                         })
-                valid_audio_refs = valid_audio_refs[:Config.PHASE4_MAX_AUDIO_REFS]
+            valid_references = valid_references[:Config.PHASE4_MAX_CITATIONS]
 
-                # 3. Verify Citations (Hallucination Check)
-                valid_citations = []
-                citations = list(raw_citations)
-                for fid in found_ids:
-                    exists = any(isinstance(c, dict) and c.get("chunk_id") == fid for c in citations)
-                    if not exists and fid in chunks_map:
-                        citations.append({"chunk_id": fid, "reason": "설명 텍스트에서 참조 감지"})
+            if len(valid_proof_refs) == 0 or len(valid_references) == 0:
+                warnings.append("추천 항목: 오디오/교재 근거 불충분으로 제외")
+                if len(valid_proof_refs) == 0 and len(valid_references) == 0:
+                    _record_drop("오디오/교재 근거 모두 부족")
+                elif len(valid_proof_refs) == 0:
+                    _record_drop("오디오 근거 부족")
+                else:
+                    _record_drop("교재 근거 부족")
+                continue
 
-                if isinstance(citations, list):
-                    for cit in citations:
-                        if not isinstance(cit, dict):
-                            continue
-                        cid = cit.get("chunk_id")
-                        if cid and cid in chunks_map:
-                            chunk = chunks_map[cid]
-                            valid_citations.append({
-                                "chunk_id": cid,
-                                "reason": self._sanitize_reason(cit.get("reason"), chunks_map),
-                                "source_id": chunk.get("source_id"),
-                                "page_start": chunk.get("page_start"),
-                                "page_end": chunk.get("page_end"),
-                                "anchor_path": chunk.get("anchor_path")
-                            })
-                valid_citations = valid_citations[:Config.PHASE4_MAX_CITATIONS]
+            if self._contains_verbatim_span(why, chunks_map, Config.PHASE4_VERBATIM_WINDOW):
+                why = "교재 핵심 개념 기반 요약입니다. 원문 직접 인용은 생략했습니다."
+                warnings.append("추천 항목: 원문 인용 보호 규칙 적용(요약으로 대체)")
 
-                if len(valid_audio_refs) == 0 or len(valid_citations) == 0:
-                    warnings.append(f"{key}: 오디오/교재 근거 불충분으로 항목 제외")
-                    if len(valid_audio_refs) == 0 and len(valid_citations) == 0:
-                        _record_drop("오디오/교재 근거 모두 부족")
-                    elif len(valid_audio_refs) == 0:
-                        _record_drop("오디오 근거 부족")
-                    else:
-                        _record_drop("교재 근거 부족")
-                    continue
+            cleaned_queue.append({
+                "title": title,
+                "why": why,
+                "importance": importance,
+                "importance_score": importance_score,
+                "study_action": study_action,
+                "proof_refs": valid_proof_refs,
+                "references": valid_references
+            })
 
-                if self._contains_verbatim_span(why, chunks_map, Config.PHASE4_VERBATIM_WINDOW):
-                    why = "교재 핵심 개념 기반 요약입니다. 원문 직접 인용은 생략했습니다."
-                    warnings.append(f"{key}: 원문 인용 보호 규칙 적용(요약으로 대체)")
-
-                cleaned[key].append({
-                    "title": title,
-                    "why": why,
-                    "confidence": conf,
-                    "audio_refs": valid_audio_refs,
-                    "citations": valid_citations
-                })
+        cleaned_queue = self._dedup_and_sort_queue(cleaned_queue)
 
         if dropped_counts:
             total_dropped = sum(dropped_counts.values())
@@ -522,8 +529,70 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             if dropped_examples:
                 warnings.append("검증 제외 예시: " + " | ".join(dropped_examples))
 
-        cleaned["warnings"] = list(dict.fromkeys(warnings))
-        return cleaned
+        return {
+            "recommendation_queue": cleaned_queue,
+            "warnings": list(dict.fromkeys(warnings))
+        }
+
+    def _extract_raw_queue_items(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        queue = report.get("recommendation_queue")
+        if isinstance(queue, list):
+            return [item for item in queue if isinstance(item, dict)]
+
+        # Legacy compatibility: previous schema categories
+        legacy_items: List[Dict[str, Any]] = []
+        for key in ["professor_mentioned", "likely", "trap_warnings"]:
+            value = report.get(key, [])
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                copied = dict(item)
+                if not isinstance(copied.get("study_action"), str):
+                    if key == "trap_warnings":
+                        copied["study_action"] = "함정 포인트를 오답노트로 정리하고 유사 문제를 다시 풀어보세요."
+                    elif key == "professor_mentioned":
+                        copied["study_action"] = "교수 강조 구간과 연결된 교재 문제를 우선 풀이하세요."
+                    else:
+                        copied["study_action"] = "핵심 개념 확인 후 연습문제를 순서대로 풀이하세요."
+                legacy_items.append(copied)
+        return legacy_items
+
+    def _dedup_and_sort_queue(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not items:
+            return []
+
+        merged: Dict[Any, Dict[str, Any]] = {}
+        for item in items:
+            title = str(item.get("title", "")).strip().lower()
+            title = re.sub(r"\s+", " ", title)
+            chunk_ids = sorted(
+                [
+                    ref.get("chunk_id")
+                    for ref in item.get("references", [])
+                    if isinstance(ref, dict) and ref.get("chunk_id")
+                ]
+            )
+            key = (title, tuple(chunk_ids[:3]))
+            existing = merged.get(key)
+            if not existing or item.get("importance", 0.0) > existing.get("importance", 0.0):
+                merged[key] = item
+
+        deduped = list(merged.values())
+        deduped.sort(
+            key=lambda row: (
+                row.get("importance", 0.0),
+                len(row.get("proof_refs", [])),
+                len(row.get("references", []))
+            ),
+            reverse=True
+        )
+
+        deduped = deduped[:Config.PHASE4_MAX_QUEUE_ITEMS]
+        for idx, item in enumerate(deduped, start=1):
+            item["rank"] = idx
+        return deduped
 
     def _contains_verbatim_span(self, text: str, chunks_map: Dict[str, Dict], window: int) -> bool:
         normalized = " ".join(text.split())
@@ -568,14 +637,13 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         evidence_candidates: List[Dict[str, Any]],
         chunks_map: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Any]:
-        categories = ["professor_mentioned", "likely", "trap_warnings"]
-        item_counts = {k: len(report.get(k, [])) for k in categories}
+        recommendation_queue = report.get("recommendation_queue", [])
+        if not isinstance(recommendation_queue, list):
+            recommendation_queue = []
+        item_counts = {"recommendation_queue": len(recommendation_queue)}
         all_items: List[Dict[str, Any]] = []
         input_signal_ids = set()
-        for key in categories:
-            value = report.get(key, [])
-            if isinstance(value, list):
-                all_items.extend(value)
+        all_items.extend(recommendation_queue)
         for signal in signals:
             sid = signal.get("signal_id")
             if sid:
@@ -587,31 +655,31 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             if sid:
                 evidence_signal_ids.add(sid)
 
-        audio_refs_total = 0
-        citations_total = 0
+        proof_refs_total = 0
+        references_total = 0
         unique_signal_refs = set()
-        unique_cited_chunks = set()
-        confidence_values = []
+        unique_referenced_chunks = set()
+        importance_values = []
         for item in all_items:
-            conf = item.get("confidence")
-            if isinstance(conf, (int, float)):
-                confidence_values.append(float(conf))
+            importance = item.get("importance")
+            if isinstance(importance, (int, float)):
+                importance_values.append(float(importance))
 
-            refs = item.get("audio_refs", [])
+            refs = item.get("proof_refs", [])
             if isinstance(refs, list):
-                audio_refs_total += len(refs)
+                proof_refs_total += len(refs)
                 for ref in refs:
                     if isinstance(ref, dict) and ref.get("signal_id"):
                         unique_signal_refs.add(ref["signal_id"])
 
-            citations = item.get("citations", [])
-            if isinstance(citations, list):
-                citations_total += len(citations)
-                for citation in citations:
-                    if isinstance(citation, dict) and citation.get("chunk_id"):
-                        unique_cited_chunks.add(citation["chunk_id"])
+            references = item.get("references", [])
+            if isinstance(references, list):
+                references_total += len(references)
+                for reference in references:
+                    if isinstance(reference, dict) and reference.get("chunk_id"):
+                        unique_referenced_chunks.add(reference["chunk_id"])
 
-        avg_confidence = round(sum(confidence_values) / len(confidence_values), 4) if confidence_values else None
+        avg_importance = round(sum(importance_values) / len(importance_values), 4) if importance_values else None
         warnings_count = len(report.get("warnings", [])) if isinstance(report.get("warnings"), list) else 0
 
         return {
@@ -622,11 +690,11 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             "input_unique_chunks": len(chunks_map),
             "output_items_total": len(all_items),
             "output_item_counts": item_counts,
-            "output_audio_refs_total": audio_refs_total,
-            "output_citations_total": citations_total,
+            "output_proof_refs_total": proof_refs_total,
+            "output_references_total": references_total,
             "output_unique_signal_refs": len(unique_signal_refs),
-            "output_unique_cited_chunks": len(unique_cited_chunks),
-            "output_avg_confidence": avg_confidence,
+            "output_unique_referenced_chunks": len(unique_referenced_chunks),
+            "output_avg_importance": avg_importance,
             "warnings_count": warnings_count
         }
 
@@ -639,10 +707,8 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 
     def _save_empty_report(self):
         empty = {
-            "professor_mentioned": [],
-            "likely": [],
-            "trap_warnings": [],
-            "warnings": ["유효한 신호가 없어 리포트 항목이 생성되지 않았습니다."]
+            "recommendation_queue": [],
+            "warnings": ["유효한 신호가 없어 추천 문제 큐가 생성되지 않았습니다."]
         }
         for sid in self.session_ids:
             self._save_report(sid, empty)

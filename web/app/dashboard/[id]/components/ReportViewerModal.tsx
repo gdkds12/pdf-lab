@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { createClient } from "@/utils/supabase/client"
-import { Loader2, BookOpen, AlertTriangle, Lightbulb } from "lucide-react"
+import { Loader2, BookOpen, AlertTriangle, Lightbulb, Headphones, ListOrdered } from "lucide-react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 interface ReportViewerModalProps {
@@ -12,23 +12,62 @@ interface ReportViewerModalProps {
   title: string
 }
 
-type ReportData = {
-  warnings?: string[]
-  professor_mentioned?: ReportItem[]
-  likely?: ReportItem[]
-  trap_warnings?: ReportItem[]
+type ProofRef = {
+  signal_id: string
+  audio_chunk_id?: string | null
+  t0_sec: number
+  t1_sec: number
+  note?: string | null
 }
 
-type ReportItem = {
+type ReferenceRef = {
+  chunk_id: string
+  reason?: string | null
+  source_id?: string | null
+  page_start?: number | null
+  page_end?: number | null
+  anchor_path?: string[] | null
+}
+
+type QueueItem = {
+  rank?: number
   title: string
   why: string
-  confidence: number
-  citations: {
-    chunk_id: string
-    reason?: string
-    page_start?: number
-    page_end?: number
-  }[]
+  study_action: string
+  importance: number
+  importance_score: number
+  proof_refs: ProofRef[]
+  references: ReferenceRef[]
+}
+
+type ReportData = {
+  warnings?: string[]
+  recommendation_queue?: QueueItem[]
+}
+
+function formatSecRange(t0: number, t1: number) {
+  const toMmSs = (sec: number) => {
+    const s = Math.max(0, Math.floor(sec))
+    const mm = Math.floor(s / 60)
+    const ss = s % 60
+    return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+  }
+  return `${toMmSs(t0)} ~ ${toMmSs(t1)}`
+}
+
+function formatReference(ref: ReferenceRef) {
+  if (typeof ref.page_start === 'number') {
+    if (typeof ref.page_end === 'number' && ref.page_end !== ref.page_start) {
+      return `p.${ref.page_start}-${ref.page_end}`
+    }
+    return `p.${ref.page_start}`
+  }
+
+  if (Array.isArray(ref.anchor_path) && ref.anchor_path.length > 0) {
+    return ref.anchor_path.join(' > ')
+  }
+
+  return '교재 참조'
 }
 
 export default function ReportViewerModal({ isOpen, onClose, sessionId, title }: ReportViewerModalProps) {
@@ -70,16 +109,14 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
     fetchReport()
   }, [isOpen, sessionId])
 
-  const professorMentioned = report?.professor_mentioned ?? []
-  const likelyItems = report?.likely ?? []
-  const trapWarnings = report?.trap_warnings ?? []
   const warnings = report?.warnings ?? []
+  const queue = report?.recommendation_queue ?? []
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="w-[min(100vw-1.5rem,72rem)] max-w-5xl border-white/15 bg-[#0d121a]/95 p-0 text-foreground">
         <DialogHeader className="border-b border-white/10 px-5 py-4 sm:px-6">
-          <DialogTitle className="text-lg font-semibold">통합 분석 리포트</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">추천 문제 큐 리포트</DialogTitle>
           <p className="text-xs text-foreground/70">{title}</p>
         </DialogHeader>
 
@@ -95,7 +132,7 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
               <p className="text-sm font-semibold">{error}</p>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl space-y-8">
+            <div className="mx-auto max-w-4xl space-y-6">
               {warnings.length > 0 && (
                 <section className="rounded-xl border border-amber-300/35 bg-amber-500/10 px-4 py-3">
                   <h3 className="text-sm font-semibold text-amber-100">검증/보호 안내</h3>
@@ -108,55 +145,71 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
               )}
 
               <section>
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="rounded-lg bg-red-400/20 p-2 text-red-300">
-                    <AlertTriangle className="h-5 w-5" />
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="rounded-lg bg-primary/20 p-2 text-primary">
+                    <ListOrdered className="h-5 w-5" />
                   </div>
-                  <h3 className="text-lg font-bold text-foreground">교수님 강조 (출제 유력)</h3>
+                  <h3 className="text-lg font-bold text-foreground">추천 문제 큐</h3>
                 </div>
-                <div className="grid gap-4">
-                  {professorMentioned.length === 0 ? (
-                    <p className="pl-2 text-sm italic text-foreground/60">특이 강조 사항 없음</p>
-                  ) : (
-                    professorMentioned.map((item, idx) => <ReportCard key={`pm-${idx}`} item={item} type="high" />)
-                  )}
-                </div>
-              </section>
 
-              <div className="h-px bg-white/10" />
-
-              <section>
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="rounded-lg bg-blue-400/20 p-2 text-blue-300">
-                    <BookOpen className="h-5 w-5" />
+                {queue.length === 0 ? (
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-foreground/70">
+                    생성된 추천 항목이 없습니다. 오디오 파일을 더 추가한 뒤 다시 리포트를 생성해 주세요.
                   </div>
-                  <h3 className="text-lg font-bold text-foreground">출제 예상 내용</h3>
-                </div>
-                <div className="grid gap-4">
-                  {likelyItems.length === 0 ? (
-                    <p className="pl-2 text-sm italic text-foreground/60">예상 내용 없음</p>
-                  ) : (
-                    likelyItems.map((item, idx) => <ReportCard key={`likely-${idx}`} item={item} type="normal" />)
-                  )}
-                </div>
-              </section>
+                ) : (
+                  <div className="space-y-4">
+                    {queue.map((item, idx) => (
+                      <article key={`${item.title}-${idx}`} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                        <div className="mb-2 flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold text-primary">
+                              큐 {item.rank ?? idx + 1} · 중요도 {item.importance_score}점
+                            </p>
+                            <h4 className="mt-1 text-base font-semibold text-foreground">{item.title}</h4>
+                          </div>
+                          <span className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-xs text-foreground/70">
+                            {(item.importance * 100).toFixed(0)}%
+                          </span>
+                        </div>
 
-              <div className="h-px bg-white/10" />
+                        <p className="text-sm leading-relaxed text-foreground/80">{item.why}</p>
+                        <p className="mt-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs text-primary-foreground">
+                          학습 액션: {item.study_action}
+                        </p>
 
-              <section>
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="rounded-lg bg-yellow-400/20 p-2 text-yellow-200">
-                    <Lightbulb className="h-5 w-5" />
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-lg border border-white/10 bg-black/25 p-3">
+                            <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-foreground/70">
+                              <Headphones className="h-3.5 w-3.5" /> 근거 음성 구간
+                            </p>
+                            <div className="space-y-2">
+                              {item.proof_refs?.map((proof, proofIdx) => (
+                                <div key={`${proof.signal_id}-${proofIdx}`} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs">
+                                  <p className="font-mono text-foreground/80">{formatSecRange(proof.t0_sec, proof.t1_sec)}</p>
+                                  {proof.note ? <p className="mt-1 text-foreground/70">{proof.note}</p> : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-white/10 bg-black/25 p-3">
+                            <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-foreground/70">
+                              <BookOpen className="h-3.5 w-3.5" /> 교재 좌표
+                            </p>
+                            <div className="space-y-2">
+                              {item.references?.map((ref, refIdx) => (
+                                <div key={`${ref.chunk_id}-${refIdx}`} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs">
+                                  <p className="font-mono text-foreground/80">{formatReference(ref)}</p>
+                                  {ref.reason ? <p className="mt-1 text-foreground/70">{ref.reason}</p> : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
                   </div>
-                  <h3 className="text-lg font-bold text-foreground">함정 주의 / 오개념 경고</h3>
-                </div>
-                <div className="grid gap-4">
-                  {trapWarnings.length === 0 ? (
-                    <p className="pl-2 text-sm italic text-foreground/60">특별한 주의사항 없음</p>
-                  ) : (
-                    trapWarnings.map((item, idx) => <ReportCard key={`trap-${idx}`} item={item} type="warning" />)
-                  )}
-                </div>
+                )}
               </section>
             </div>
           )}
@@ -172,50 +225,5 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function ReportCard({ item, type }: { item: ReportItem; type: 'high' | 'normal' | 'warning' }) {
-  const borderColor =
-    type === 'high' ? 'border-red-300/40' : type === 'warning' ? 'border-yellow-300/40' : 'border-blue-300/30'
-  const bgColor = type === 'high' ? 'bg-red-500/10' : type === 'warning' ? 'bg-yellow-500/10' : 'bg-white/5'
-
-  return (
-    <article className={`rounded-xl border ${borderColor} ${bgColor} p-5 shadow-sm transition hover:bg-white/10`}>
-      <div className="mb-2 flex items-start justify-between">
-        <h4 className="text-base font-semibold text-foreground">{item.title}</h4>
-        {item.confidence ? (
-          <span className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-xs text-foreground/70">
-            신뢰도: {(item.confidence * 100).toFixed(0)}%
-          </span>
-        ) : null}
-      </div>
-      <p className="mb-3 text-sm leading-relaxed text-foreground/80">{item.why}</p>
-
-      {item.citations && item.citations.length > 0 && (
-        <div className="mt-3 space-y-2">
-          <p className="flex items-center gap-1 text-xs font-semibold text-foreground/60">
-            <BookOpen className="h-3 w-3" /> 관련 교재 참조
-          </p>
-          {item.citations.map((citation, index) => (
-            <div key={`${citation.chunk_id}-${index}`} className="rounded-md border border-white/10 bg-black/25 p-2 text-xs transition hover:border-primary/50">
-              <div className="mb-1.5 flex items-center gap-2">
-                <span className="inline-flex flex-shrink-0 items-center rounded border border-white/10 bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-foreground/80">
-                  {citation.page_start ? (
-                    <>p.{citation.page_start}{citation.page_end && citation.page_end !== citation.page_start ? `-${citation.page_end}` : ''}</>
-                  ) : (
-                    '참조'
-                  )}
-                </span>
-                {citation.reason ? <span className="truncate font-medium text-primary">{citation.reason}</span> : null}
-              </div>
-              <p className="border-l-2 border-primary/40 pl-2 text-[11px] leading-relaxed text-foreground/60">
-                원문 텍스트는 제공되지 않으며 위치 정보만 제공합니다.
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </article>
   )
 }

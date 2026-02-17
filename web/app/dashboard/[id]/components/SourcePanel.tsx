@@ -54,6 +54,7 @@ type Notice = {
 type LatestReportSummary = {
   sessionId: string
   createdAt: string
+  queueCount: number
   evidenceCount: number
   warningCount: number
 }
@@ -112,15 +113,19 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       }
 
       const payload = latest.report_json as Record<string, unknown> | null
-      const evidenceCount =
-        countList(payload?.professor_mentioned) +
-        countList(payload?.likely) +
-        countList(payload?.trap_warnings)
+      const queueItems = Array.isArray(payload?.recommendation_queue)
+        ? (payload?.recommendation_queue as Array<Record<string, unknown>>)
+        : []
+      const queueCount = queueItems.length
+      const evidenceCount = queueItems.reduce((acc, item) => {
+        return acc + countList(item?.proof_refs) + countList(item?.references)
+      }, 0)
       const warningCount = countList(payload?.warnings)
 
       setLatestReport({
         sessionId: latest.session_id,
         createdAt: latest.created_at,
+        queueCount,
         evidenceCount,
         warningCount,
       })
@@ -614,7 +619,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         <div className="border-b border-white/10 bg-primary/10 px-4 py-2 text-[11px] text-primary-foreground">
           <div className="flex items-center justify-between gap-2">
             <p>
-              최신 통합 리포트: {formatTimestamp(latestReport.createdAt)} · 근거 {latestReport.evidenceCount}개 · 경고 {latestReport.warningCount}개
+              최신 통합 리포트: {formatTimestamp(latestReport.createdAt)} · 추천 {latestReport.queueCount}개 · 근거 {latestReport.evidenceCount}개 · 경고 {latestReport.warningCount}개
             </p>
             <button
               onClick={() => setViewingReportSessionId(latestReport.sessionId)}

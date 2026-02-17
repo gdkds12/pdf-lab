@@ -222,7 +222,7 @@ def _call_gemini_extraction(
                 "properties": {
                 "signal_type": {
                     "type": "STRING",
-                    "enum": ["hint", "likely", "trap"]
+                    "enum": ["hint", "priority", "trap", "repeat"]
                 },
                 "content": {
                     "type": "STRING"
@@ -248,7 +248,7 @@ def _call_gemini_extraction(
     # System Prompt
     system_instruction = """
 [ROLE]
-You are an exam-focused lecture analyzer. Your job is ONLY to extract exam-relevant signals from the provided lecture audio and generate textbook search intents.
+You are a lecture signal analyzer. Your job is ONLY to extract professor hints from lecture audio and generate textbook search intents for study recommendations.
 
 [NON_NEGOTIABLES]
 - Output MUST be a SINGLE valid JSON object matching the provided JSON Schema.
@@ -263,7 +263,7 @@ You are an exam-focused lecture analyzer. Your job is ONLY to extract exam-relev
 [REQUIRED_OUTPUT_STRUCTURE]
 You must return a JSON object with a single key "signals", which is an array of objects.
 Each object in "signals" must have:
-- "signal_type": one of "hint", "likely", "trap"
+- "signal_type": one of "hint", "priority", "trap", "repeat"
 - "content": Korean text summarizing the signal (max 160 chars)
 - "search_queries": Array of 2-6 strings (keywords for textbook search)
 - "audio_chunk_id": The ID provided in the input
@@ -277,12 +277,13 @@ Each object in "signals" must have:
 - search_queries may be Korean or English keywords.
 
 [TASK]
-1. Scan the audio input for unique exam signals.
+1. Scan the audio input for unique lecture hints that can guide textbook practice.
 2. **Deduplication Logic**:
    - Compare new signals with already extracted ones. 
    - If the `content` or `search_queries` overlap by more than 70%, DISCARD the new one or MERGE them.
    - Do not generate multiple signals for the same virtual short circuit (V+=V-) or KCL logic unless they occur in completely different contexts.
-3. Once the entire input text is scanned once, finalize the JSON and STOP.
+3. Include explicit "중요", "꼭", "함정", "반복" 등의 발화가 있으면 signal_type에 반영.
+4. Once the entire input text is scanned once, finalize the JSON and STOP.
 
 [EXECUTION]
 - You are a precise extractor, not a repetitive writer.
@@ -368,7 +369,7 @@ def _normalize_search_queries(queries: Any) -> List[str]:
 
 
 def _validate_signals(raw_signals: List[Dict[str, Any]], audio_chunk_id: str, chunk_index: Optional[int]) -> List[Dict[str, Any]]:
-    valid_signal_types = {"hint", "likely", "trap"}
+    valid_signal_types = {"hint", "priority", "trap", "repeat"}
     validated: List[Dict[str, Any]] = []
 
     for sig in raw_signals:

@@ -37,6 +37,7 @@ class Config:
     PHASE4_MAX_WHY_LEN = int(os.getenv("PHASE4_MAX_WHY_LEN", "260"))
     PHASE4_MAX_AUDIO_REFS = int(os.getenv("PHASE4_MAX_AUDIO_REFS", "5"))
     PHASE4_MAX_CITATIONS = int(os.getenv("PHASE4_MAX_CITATIONS", "5"))
+    PHASE4_MAX_QUEUE_ITEMS = int(os.getenv("PHASE4_MAX_QUEUE_ITEMS", "20"))
     PHASE4_STRICT_SCHEMA = os.getenv("PHASE4_STRICT_SCHEMA", "true").lower() in ("1", "true", "yes")
     
     @classmethod
