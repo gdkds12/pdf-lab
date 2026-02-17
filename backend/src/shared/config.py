@@ -15,14 +15,15 @@ class Config:
     SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
     
     # Gemini Configuration
-    GEMINI_LOCATION = "us-central1"
-    GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
+    # For Gemini 2.x/2.5 standard paygo, prefer global endpoint for better pool access.
+    GEMINI_LOCATION = os.getenv("GEMINI_LOCATION", "global")
+    GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-lite")
     # FORCE UPDATE TIMESTAMP 2026-01-14 16:30
     # Falling back to known valid Thinking Model
-    REASONING_MODEL_NAME = "gemini-2.5-flash-lite"
+    REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-2.5-flash-lite")
 
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
-    VERTEX_LOCATION = "us-central1" 
+    VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
     EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-001")
     
     # Pipeline Settings
@@ -30,8 +31,8 @@ class Config:
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
     PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "12"))
     PHASE1_OCR_TIMEOUT_SEC = int(os.getenv("PHASE1_OCR_TIMEOUT_SEC", "90"))
-    PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "1"))
-    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "2"))
+    PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "2"))
+    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "4"))
     PHASE2_CHUNK_MAX_RETRIES = int(os.getenv("PHASE2_CHUNK_MAX_RETRIES", "3"))
     PHASE2_CHUNK_RETRY_BASE_SEC = float(os.getenv("PHASE2_CHUNK_RETRY_BASE_SEC", "2.0"))
     PHASE2_GEMINI_MAX_RETRIES = int(os.getenv("PHASE2_GEMINI_MAX_RETRIES", "5"))

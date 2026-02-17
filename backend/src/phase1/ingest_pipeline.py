@@ -245,6 +245,8 @@ class IngestPipeline:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
         logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
+        # OCR generation calls should use Gemini global endpoint.
+        vertexai.init(project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
         model = GenerativeModel(Config.GEMINI_MODEL_NAME)
         
         # Prompt as per documentation
@@ -353,6 +355,8 @@ class IngestPipeline:
 
     def _embed_chunks(self, chunks: List[Dict]) -> List[Dict]:
         logger.info("Step 5: Embedding...")
+        # Embedding model remains on Vertex regional endpoint.
+        vertexai.init(project=Config.GCP_PROJECT, location=Config.VERTEX_LOCATION)
         model = TextEmbeddingModel.from_pretrained(Config.EMBEDDING_MODEL_NAME)
         
         batch_size = Config.EMBED_BATCH_SIZE
