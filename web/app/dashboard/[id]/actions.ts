@@ -76,8 +76,10 @@ function parseGcsUri(gcsUri: string): { bucket: string, path: string } {
 export async function getSignedUploadUrl({ fileName, contentType }: { fileName: string, contentType: string }) {
     'use server'
 
-    if (!contentType.startsWith('audio/')) {
-        throw new Error('Only audio uploads are allowed via server signed URL')
+    const isAudio = contentType.startsWith('audio/')
+    const isPdf = contentType === 'application/pdf'
+    if (!isAudio && !isPdf) {
+        throw new Error('Only audio/pdf uploads are allowed via server signed URL')
     }
     
     // GCS Signed URL generation
@@ -103,7 +105,41 @@ export async function getSignedUploadUrl({ fileName, contentType }: { fileName: 
 
 export async function createSourceAndTrigger(subjectId: string, title: string, gcsPath: string) {
     'use server'
-    throw new Error("Deprecated: textbook uploads must go directly from client to Gemini")
+    const safeSubjectId = assertUuid(subjectId, "subjectId")
+    const safeTitle = (title || "").trim() || "Textbook"
+    parseGcsUri(gcsPath)
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) throw new Error("Unauthorized")
+
+    const { data: source, error } = await supabase.from('sources').insert({
+        user_id: user.id,
+        subject_id: safeSubjectId,
+        kind: 'textbook',
+        title: safeTitle,
+        gcs_pdf_url: gcsPath,
+        ingest_status: 'queued'
+    }).select().single()
+
+    if (error || !source) {
+        console.error("DB Source Insert Error:", error)
+        throw new Error("Failed to create source record")
+    }
+
+    try {
+        await runThunderJob(['--phase', '1', '--job-payload', JSON.stringify({
+            source_id: source.source_id,
+            gcs_pdf_url: gcsPath
+        })])
+    } catch (jobError) {
+        console.error("Failed to trigger PDF ingest job:", jobError)
+        await supabase.from('sources').update({ ingest_status: 'failed' }).eq('source_id', source.source_id)
+        throw new Error("Failed to start PDF processing job.")
+    }
+
+    revalidatePath(`/dashboard/${safeSubjectId}`)
+    return { success: true, sourceId: source.source_id }
 }
 
 export async function createSourceFromGeminiFile(subjectId: string, title: string, geminiFileUri: string) {

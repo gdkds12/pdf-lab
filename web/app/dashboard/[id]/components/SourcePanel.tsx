@@ -17,7 +17,7 @@ import {
 import { useState, useRef, useEffect, useMemo } from "react"
 import {
   getSignedUploadUrl,
-  createSourceFromGeminiFile,
+  createSourceAndTrigger,
   createSessionAndTrigger,
   createReportJob,
   deleteSourceItem,
@@ -456,68 +456,29 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
 
     const processSingleFile = async (file: File) => {
       const isAudio = file.type.startsWith('audio/')
+      const safeName = file.name.replace(/[^\w.\-()\[\]\s가-힣]/g, "_")
+      const fileName = `${subjectId}/${Date.now()}_${crypto.randomUUID()}_${safeName}`
+      const { url, gcsPath } = await getSignedUploadUrl({
+        fileName,
+        contentType: file.type,
+      })
+
+      const uploadResponse = await fetch(url, {
+        method: 'PUT',
+        body: file,
+        headers: { 'Content-Type': file.type },
+      })
+
+      if (!uploadResponse.ok) {
+        throw new Error(`${file.name}: ${isAudio ? '오디오' : 'PDF'} 업로드 실패`)
+      }
+
       if (isAudio) {
-        const safeName = file.name.replace(/[^\w.\-()\[\]\s가-힣]/g, "_")
-        const fileName = `${subjectId}/${Date.now()}_${crypto.randomUUID()}_${safeName}`
-        const { url, gcsPath } = await getSignedUploadUrl({
-          fileName,
-          contentType: file.type,
-        })
-
-        const uploadResponse = await fetch(url, {
-          method: 'PUT',
-          body: file,
-          headers: { 'Content-Type': file.type },
-        })
-
-        if (!uploadResponse.ok) {
-          throw new Error(`${file.name}: 오디오 업로드 실패`)
-        }
-
         await createSessionAndTrigger(subjectId, file.name, gcsPath)
         return
       }
 
-      const sessionRes = await fetch('/api/gemini/upload-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-        }),
-      })
-
-      if (!sessionRes.ok) {
-        const errorText = await sessionRes.text()
-        throw new Error(`${file.name}: ${errorText || 'Gemini 업로드 세션 생성 실패'}`)
-      }
-
-      const { uploadUrl } = (await sessionRes.json()) as { uploadUrl: string }
-
-      const uploadRes = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          'X-Goog-Upload-Command': 'upload, finalize',
-          'X-Goog-Upload-Offset': '0',
-          'Content-Type': file.type,
-        },
-        body: file,
-      })
-
-      if (!uploadRes.ok) {
-        const errorText = await uploadRes.text()
-        throw new Error(`${file.name}: ${errorText || 'Gemini 파일 업로드 실패'}`)
-      }
-
-      const uploadPayload = (await uploadRes.json()) as { file?: { uri?: string } }
-      const geminiFileUri = uploadPayload.file?.uri
-
-      if (!geminiFileUri) {
-        throw new Error(`${file.name}: Gemini 파일 URI를 받지 못했습니다.`)
-      }
-
-      await createSourceFromGeminiFile(subjectId, file.name, geminiFileUri)
+      await createSourceAndTrigger(subjectId, file.name, gcsPath)
     }
 
     type UploadResult = { fileName: string; ok: true } | { fileName: string; ok: false; error: string }
@@ -671,7 +632,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       )}
 
       <div className="border-b border-white/10 bg-black/10 px-4 py-2 text-[11px] text-foreground/65">
-        PDF는 클라이언트에서 Gemini로 직접 업로드되며 원문은 UI에서 열람할 수 없습니다.
+        PDF/오디오는 GCS 업로드 후 서버 파이프라인으로 처리됩니다. 원문은 UI에서 열람할 수 없습니다.
       </div>
       <div className="border-b border-white/10 bg-black/10 px-4 py-2 text-[11px] text-foreground/65">
         리포트는 선택한 오디오 전체를 통합해 1개로 생성됩니다.
