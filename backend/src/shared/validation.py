@@ -2,6 +2,8 @@ import json
 from typing import Any, Dict, List
 from uuid import UUID
 
+NIL_UUID = UUID("00000000-0000-0000-0000-000000000000")
+
 
 def parse_payload(payload_str: str) -> Dict[str, Any]:
     try:
@@ -19,7 +21,10 @@ def require_uuid(payload: Dict[str, Any], key: str) -> str:
         raise ValueError(f"Missing {key} in payload")
     raw = value.strip()
     try:
-        return str(UUID(raw))
+        parsed = UUID(raw)
+        if parsed == NIL_UUID:
+            raise ValueError
+        return str(parsed)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid {key} UUID: {raw}") from exc
 
@@ -37,7 +42,10 @@ def require_uuid_list(payload: Dict[str, Any], key: str, fallback_key: str = "")
             raise ValueError(f"{key} contains an empty or non-string value")
         raw = item.strip()
         try:
-            normalized.append(str(UUID(raw)))
+            parsed = UUID(raw)
+            if parsed == NIL_UUID:
+                raise ValueError
+            normalized.append(str(parsed))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid UUID in {key}: {raw}") from exc
     return normalized
