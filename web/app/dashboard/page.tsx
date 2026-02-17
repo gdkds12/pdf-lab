@@ -21,7 +21,7 @@ export default async function DashboardPage() {
       <section className="th-card">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="th-pill mb-2 inline-flex">Workspace</p>
+            <p className="th-pill mb-2 inline-flex">학습 워크스페이스</p>
             <h1 className="text-xl font-semibold tracking-tight">내 학습 프로젝트</h1>
             <p className="th-muted mt-1">과목별로 출제 신호 분석 세션을 관리하세요.</p>
           </div>

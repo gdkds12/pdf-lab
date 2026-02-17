@@ -186,7 +186,7 @@ function ReportCard({ item, type }: { item: ReportItem; type: 'high' | 'normal' 
         <h4 className="text-base font-semibold text-foreground">{item.title}</h4>
         {item.confidence ? (
           <span className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 font-mono text-xs text-foreground/70">
-            Conf: {(item.confidence * 100).toFixed(0)}%
+            신뢰도: {(item.confidence * 100).toFixed(0)}%
           </span>
         ) : null}
       </div>
@@ -204,7 +204,7 @@ function ReportCard({ item, type }: { item: ReportItem; type: 'high' | 'normal' 
                   {citation.page_start ? (
                     <>p.{citation.page_start}{citation.page_end && citation.page_end !== citation.page_start ? `-${citation.page_end}` : ''}</>
                   ) : (
-                    'Reference'
+                    '참조'
                   )}
                 </span>
                 {citation.reason ? <span className="truncate font-medium text-primary">{citation.reason}</span> : null}

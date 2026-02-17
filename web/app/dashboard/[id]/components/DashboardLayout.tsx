@@ -9,17 +9,17 @@ import ChatInterface from "./ChatInterface"
 const priorityCards = [
   {
     title: "반복 강조 개념 우선 복습",
-    level: "High",
+    level: "높음",
     action: "최근 3회차 강의에서 반복된 정의를 교재 핵심 섹션과 함께 먼저 확인하세요.",
   },
   {
     title: "오답 유도 포인트 정리",
-    level: "Medium",
+    level: "중간",
     action: "예외 조건/단위/부호 관련 함정을 별도 노트로 정리하세요.",
   },
   {
     title: "연결 단원 예습",
-    level: "Low",
+    level: "낮음",
     action: "다음 주차와 연결된 단원의 도입부 개념만 미리 읽어두세요.",
   },
 ]
@@ -70,7 +70,7 @@ export default function DashboardLayout({ subject }: { subject: any }) {
         <section className="space-y-3">
           {priorityCards.map((card) => (
             <article key={card.title} className="th-card">
-              <p className="text-xs font-semibold text-primary">Priority {card.level}</p>
+              <p className="text-xs font-semibold text-primary">우선순위 {card.level}</p>
               <h2 className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Compass className="h-4 w-4" />
                 {card.title}
@@ -94,7 +94,7 @@ export default function DashboardLayout({ subject }: { subject: any }) {
             </li>
             <li className="flex items-start gap-2">
               <BookMarked className="mt-0.5 h-4 w-4 text-primary" />
-              결과는 page/anchor/timecode 기반 근거 위치를 중심으로 제공합니다.
+              결과는 페이지/앵커/타임코드 기반 근거 위치를 중심으로 제공합니다.
             </li>
             <li className="flex items-start gap-2">
               <BookMarked className="mt-0.5 h-4 w-4 text-primary" />

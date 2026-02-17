@@ -172,7 +172,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         combined.push({
           id: session.session_id,
           type: 'audio',
-          title: session.gcs_audio_url.split('/').pop() || 'Audio',
+          title: session.gcs_audio_url.split('/').pop() || '오디오 파일',
           status: session.status,
           createdAt: session.created_at,
           stats,
@@ -310,7 +310,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         {
           id: row.session_id,
           type: 'audio',
-          title: row.gcs_audio_url.split('/').pop() || 'Audio',
+          title: row.gcs_audio_url.split('/').pop() || '오디오 파일',
           status: row.status,
           createdAt: row.created_at,
           stats: { total: 0, pending: 0, processing: 0, completed: 0, failed: 0 },
@@ -587,25 +587,25 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       />
 
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-black/20 px-4">
-        <h2 className="text-sm font-semibold text-foreground">Sources</h2>
+        <h2 className="text-sm font-semibold text-foreground">자료</h2>
         <div className="flex items-center gap-1">
           <button
             onClick={() => latestReportSessionId && setViewingReportSessionId(latestReportSessionId)}
             disabled={!latestReportSessionId}
             className="flex items-center gap-1 rounded-md p-1.5 text-xs font-medium text-foreground/70 transition hover:bg-white/10 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            title={latestReportSessionId ? 'Latest Integrated Report' : '아직 생성된 리포트가 없습니다'}
+            title={latestReportSessionId ? '최신 통합 리포트 보기' : '아직 생성된 리포트가 없습니다'}
           >
             <BookOpenCheck className="h-4 w-4" />
-            Report
+            리포트
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
             className="flex items-center gap-1 rounded-md p-1.5 text-xs font-medium text-foreground/70 transition hover:bg-white/10 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            title="Add Source"
+            title="자료 업로드"
           >
             {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Add
+            업로드
           </button>
         </div>
       </div>
@@ -658,7 +658,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             className="flex w-full items-center justify-center gap-2 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-            Generate Report ({readyAudios.length})
+            리포트 생성 ({readyAudios.length})
           </button>
         </div>
       )}
@@ -666,7 +666,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       <div className="flex-1 overflow-y-auto">
         {items.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
-            <p className="text-xs text-foreground/50">No sources yet. Use the + button to add PDFs or Audio.</p>
+            <p className="text-xs text-foreground/50">아직 업로드된 자료가 없습니다. 우측 상단 업로드 버튼으로 PDF/오디오를 추가하세요.</p>
           </div>
         ) : (
           <div className="flex flex-col">
@@ -758,7 +758,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         isOpen={!!viewingReportSessionId}
         onClose={() => setViewingReportSessionId(null)}
         sessionId={viewingReportSessionId || ''}
-        title={items.find((item) => item.id === viewingReportSessionId)?.title || 'Analysis Report'}
+        title={items.find((item) => item.id === viewingReportSessionId)?.title || '분석 리포트'}
       />
 
       <Dialog open={!!pendingAction} onOpenChange={(open) => !open && setPendingAction(null)}>

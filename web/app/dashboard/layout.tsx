@@ -22,7 +22,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       <header className="sticky top-0 z-30 border-b border-white/10 bg-black/35 backdrop-blur-xl">
         <div className="th-shell flex items-center justify-between pb-4 pt-4">
           <div>
-            <p className="text-xs font-semibold tracking-[0.2em] text-foreground/70">THUNDER NAVIGATOR</p>
+            <p className="text-xs font-semibold tracking-[0.2em] text-foreground/70">썬더 네비게이터</p>
             <p className="text-sm font-medium text-foreground">{user?.email ?? "로그인 필요"}</p>
           </div>
           <form action={signout}>

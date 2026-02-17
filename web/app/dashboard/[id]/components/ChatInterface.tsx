@@ -25,12 +25,12 @@ export default function ChatInterface() {
       ? {
           role: 'assistant',
           content:
-            '원문/본문 제공 요청은 허용되지 않습니다. 리포트 결과와 근거 위치(page/anchor/timecode)를 기준으로 질문해 주세요.',
+            '원문/본문 제공 요청은 허용되지 않습니다. 리포트 결과와 근거 위치(페이지/앵커/타임코드)를 기준으로 질문해 주세요.',
         }
       : {
           role: 'assistant',
           content:
-            '좋아요. 현재 대화는 분석 결과물(우선순위, confidence, citation 위치)만 기준으로 답변합니다. 질문하신 항목을 학습 액션으로 재정리해 드릴게요.',
+            '좋아요. 현재 대화는 분석 결과물(우선순위, 신뢰도, 근거 위치)만 기준으로 답변합니다. 질문하신 항목을 학습 액션으로 재정리해 드릴게요.',
         }
 
     setMessages((prev) => [...prev, { role: 'user', content: userInput }, assistantMessage])
@@ -48,7 +48,7 @@ export default function ChatInterface() {
       <div className="mt-3 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-black/25 p-3">
         {messages.length === 0 ? (
           <p className="text-xs text-foreground/60">
-            예시: "우선순위 High 1번을 이번 주 2시간 계획으로 쪼개줘"
+            예시: "우선순위 높음 1번을 이번 주 2시간 계획으로 쪼개줘"
           </p>
         ) : (
           messages.map((msg, idx) => (
@@ -57,7 +57,7 @@ export default function ChatInterface() {
               className={`rounded-lg px-3 py-2 text-xs ${msg.role === 'user' ? 'border border-white/10 bg-white/5 text-foreground' : 'bg-primary/20 text-primary-foreground'}`}
             >
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide opacity-70">
-                {msg.role === 'user' ? 'You' : 'Navigator'}
+                {msg.role === 'user' ? '질문' : '응답'}
               </span>
               {msg.content}
             </div>

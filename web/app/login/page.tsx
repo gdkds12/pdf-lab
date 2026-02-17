@@ -57,7 +57,7 @@ export default function LoginPage() {
           <div className="mb-6 flex items-center justify-between">
             <p className="th-pill inline-flex items-center gap-1">
               <Sparkles className="h-3.5 w-3.5" />
-              Thunder Navigator
+              썬더 네비게이터
             </p>
             <Link href="/" className="text-xs text-foreground/70 transition hover:text-foreground">
               홈으로
