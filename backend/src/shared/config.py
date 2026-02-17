@@ -29,7 +29,7 @@ class Config:
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
     PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "1"))
-    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "4"))
+    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "2"))
     PHASE2_CHUNK_MAX_RETRIES = int(os.getenv("PHASE2_CHUNK_MAX_RETRIES", "3"))
     PHASE2_CHUNK_RETRY_BASE_SEC = float(os.getenv("PHASE2_CHUNK_RETRY_BASE_SEC", "2.0"))
     PHASE2_GEMINI_MAX_RETRIES = int(os.getenv("PHASE2_GEMINI_MAX_RETRIES", "5"))
