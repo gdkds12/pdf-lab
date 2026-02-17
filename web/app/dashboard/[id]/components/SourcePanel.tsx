@@ -66,6 +66,14 @@ type PendingAction = {
   title: string
 }
 
+type UploadProgressState = {
+  totalFiles: number
+  uploadedFiles: number
+  bytesTotal: number
+  bytesUploaded: number
+  perFileUploadedBytes: Record<string, number>
+}
+
 const READY_REPORT_STATUSES = new Set(['reasoning', 'completed'])
 
 export default function SourcePanel({ subjectId }: { subjectId: string }) {
@@ -78,6 +86,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [isActionSubmitting, setIsActionSubmitting] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const supabase = createClient()
@@ -454,7 +463,69 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       return
     }
 
-    const processSingleFile = async (file: File) => {
+    const fileKeys = acceptedFiles.map((file, index) => `${index}:${file.name}:${file.size}:${file.lastModified}`)
+    const bytesTotal = acceptedFiles.reduce((sum, file) => sum + file.size, 0)
+    setUploadProgress({
+      totalFiles: acceptedFiles.length,
+      uploadedFiles: 0,
+      bytesTotal,
+      bytesUploaded: 0,
+      perFileUploadedBytes: Object.fromEntries(fileKeys.map((key) => [key, 0])),
+    })
+
+    const uploadBySignedUrl = (url: string, file: File, fileKey: string) =>
+      new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', url, true)
+        xhr.setRequestHeader('Content-Type', file.type)
+
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return
+          setUploadProgress((prev) => {
+            if (!prev) return prev
+            const nextPerFileUploadedBytes = {
+              ...prev.perFileUploadedBytes,
+              [fileKey]: Math.min(file.size, Math.floor(event.loaded)),
+            }
+            const nextBytesUploaded = Object.values(nextPerFileUploadedBytes).reduce((sum, value) => sum + value, 0)
+            return {
+              ...prev,
+              bytesUploaded: Math.min(prev.bytesTotal, nextBytesUploaded),
+              perFileUploadedBytes: nextPerFileUploadedBytes,
+            }
+          })
+        }
+
+        xhr.onerror = () => {
+          reject(new Error(`${file.name}: 네트워크 오류로 업로드 실패`))
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setUploadProgress((prev) => {
+              if (!prev) return prev
+              const nextPerFileUploadedBytes = {
+                ...prev.perFileUploadedBytes,
+                [fileKey]: file.size,
+              }
+              const nextBytesUploaded = Object.values(nextPerFileUploadedBytes).reduce((sum, value) => sum + value, 0)
+              return {
+                ...prev,
+                uploadedFiles: Math.min(prev.totalFiles, prev.uploadedFiles + 1),
+                bytesUploaded: Math.min(prev.bytesTotal, nextBytesUploaded),
+                perFileUploadedBytes: nextPerFileUploadedBytes,
+              }
+            })
+            resolve()
+            return
+          }
+          reject(new Error(`${file.name}: 업로드 실패 (HTTP ${xhr.status})`))
+        }
+
+        xhr.send(file)
+      })
+
+    const processSingleFile = async (file: File, fileKey: string) => {
       const isAudio = file.type.startsWith('audio/')
       const safeName = file.name.replace(/[^\w.\-()\[\]\s가-힣]/g, "_")
       const fileName = `${subjectId}/${Date.now()}_${crypto.randomUUID()}_${safeName}`
@@ -463,15 +534,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         contentType: file.type,
       })
 
-      const uploadResponse = await fetch(url, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type },
-      })
-
-      if (!uploadResponse.ok) {
-        throw new Error(`${file.name}: ${isAudio ? '오디오' : 'PDF'} 업로드 실패`)
-      }
+      await uploadBySignedUrl(url, file, fileKey)
 
       if (isAudio) {
         await createSessionAndTrigger(subjectId, file.name, gcsPath)
@@ -493,8 +556,9 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         if (index >= acceptedFiles.length) return
 
         const file = acceptedFiles[index]
+        const fileKey = fileKeys[index]
         try {
-          await processSingleFile(file)
+          await processSingleFile(file, fileKey)
           results.push({ fileName: file.name, ok: true })
         } catch (error) {
           console.error(error)
@@ -524,6 +588,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       }
     } finally {
       setIsUploading(false)
+      setUploadProgress(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
@@ -575,6 +640,11 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       : notice?.type === 'success'
         ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100'
         : 'border-blue-400/40 bg-blue-500/10 text-blue-100'
+
+  const uploadPercent =
+    uploadProgress && uploadProgress.bytesTotal > 0
+      ? Math.min(100, Math.round((uploadProgress.bytesUploaded / uploadProgress.bytesTotal) * 100))
+      : 0
 
   return (
     <div className="flex h-full w-full flex-col bg-transparent">
@@ -637,6 +707,28 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       <div className="border-b border-white/10 bg-black/10 px-4 py-2 text-[11px] text-foreground/65">
         리포트는 선택한 오디오 전체를 통합해 1개로 생성됩니다.
       </div>
+
+      {isUploading && uploadProgress && (
+        <div className="border-b border-white/10 bg-blue-500/10 px-4 py-2">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-blue-100">
+            <span>
+              업로드 진행 중 ({uploadProgress.uploadedFiles}/{uploadProgress.totalFiles} 파일)
+            </span>
+            <span>{uploadPercent}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+            <div
+              className="h-full bg-blue-400 transition-all duration-200"
+              style={{ width: `${uploadPercent}%` }}
+            />
+          </div>
+          {uploadPercent === 100 && (
+            <p className="mt-1 text-[10px] text-blue-100/90">
+              업로드 완료, 서버 처리 시작 중...
+            </p>
+          )}
+        </div>
+      )}
 
       {notice && (
         <div className={`flex items-start gap-2 border-b px-4 py-2 text-xs ${noticeClass}`}>
