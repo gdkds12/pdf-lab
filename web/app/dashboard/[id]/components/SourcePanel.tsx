@@ -26,6 +26,7 @@ import {
 import { createClient } from "@/utils/supabase/client"
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js"
 import ReportViewerModal from "./ReportViewerModal"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 type ProcessingStats = {
   total: number
@@ -57,6 +58,13 @@ type LatestReportSummary = {
   warningCount: number
 }
 
+type PendingAction = {
+  kind: 'delete' | 'retry'
+  id: string
+  itemType: 'pdf' | 'audio'
+  title: string
+}
+
 const READY_REPORT_STATUSES = new Set(['reasoning', 'completed'])
 
 export default function SourcePanel({ subjectId }: { subjectId: string }) {
@@ -67,6 +75,8 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   const [latestReportSessionId, setLatestReportSessionId] = useState<string | null>(null)
   const [latestReport, setLatestReport] = useState<LatestReportSummary | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const [isActionSubmitting, setIsActionSubmitting] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const supabase = createClient()
@@ -352,44 +362,68 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
     })
   }
 
-  const handleDelete = async (id: string, type: 'pdf' | 'audio') => {
-    if (!confirm('정말 이 항목을 삭제하시겠습니까?')) return
-
-    setItems((prev) => prev.filter((item) => item.id !== id))
-
-    try {
-      await deleteSourceItem(id, type)
-      setNotice({ type: 'success', message: '항목을 삭제했습니다.' })
-    } catch {
-      setNotice({ type: 'error', message: '삭제 중 오류가 발생했습니다.' })
-    }
+  const requestDelete = (item: SourceItem) => {
+    setPendingAction({
+      kind: 'delete',
+      id: item.id,
+      itemType: item.type,
+      title: item.title,
+    })
   }
 
-  const handleRetry = async (id: string, type: 'pdf' | 'audio') => {
-    if (!confirm('실패한 작업을 다시 실행할까요?')) return
+  const requestRetry = (item: SourceItem) => {
+    setPendingAction({
+      kind: 'retry',
+      id: item.id,
+      itemType: item.type,
+      title: item.title,
+    })
+  }
 
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          return { ...item, status: 'queued' }
-        }
-        return item
-      }),
-    )
+  const handleConfirmAction = async () => {
+    if (!pendingAction) return
+
+    const { kind, id, itemType } = pendingAction
+    setIsActionSubmitting(true)
+    setNotice(null)
 
     try {
-      await retrySourceItem(id, type)
-      setNotice({ type: 'success', message: '재실행을 시작했습니다.' })
+      if (kind === 'delete') {
+        await deleteSourceItem(id, itemType)
+        setItems((prev) => prev.filter((item) => item.id !== id))
+        setNotice({ type: 'success', message: '항목을 삭제했습니다.' })
+      } else {
+        setItems((prev) =>
+          prev.map((item) => {
+            if (item.id === id) {
+              return { ...item, status: 'queued' }
+            }
+            return item
+          }),
+        )
+
+        await retrySourceItem(id, itemType)
+        setNotice({ type: 'success', message: '재실행을 시작했습니다.' })
+      }
     } catch {
-      setItems((prev) =>
-        prev.map((item) => {
-          if (item.id === id) {
-            return { ...item, status: 'failed' }
-          }
-          return item
-        }),
-      )
-      setNotice({ type: 'error', message: '재실행 중 오류가 발생했습니다.' })
+      if (kind === 'retry') {
+        setItems((prev) =>
+          prev.map((item) => {
+            if (item.id === id) {
+              return { ...item, status: 'failed' }
+            }
+            return item
+          }),
+        )
+      }
+
+      setNotice({
+        type: 'error',
+        message: kind === 'delete' ? '삭제 중 오류가 발생했습니다.' : '재실행 중 오류가 발생했습니다.',
+      })
+    } finally {
+      setIsActionSubmitting(false)
+      setPendingAction(null)
     }
   }
 
@@ -686,7 +720,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              handleRetry(item.id, item.type)
+                              requestRetry(item)
                             }}
                             className="rounded p-1 text-foreground/60 transition-colors hover:bg-white/10 hover:text-foreground"
                             title="실패 작업 재실행"
@@ -697,7 +731,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleDelete(item.id, item.type)
+                            requestDelete(item)
                           }}
                           className="rounded p-1 text-foreground/60 transition-colors hover:bg-red-500/20 hover:text-red-300"
                           title="항목 삭제"
@@ -726,6 +760,41 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         sessionId={viewingReportSessionId || ''}
         title={items.find((item) => item.id === viewingReportSessionId)?.title || 'Analysis Report'}
       />
+
+      <Dialog open={!!pendingAction} onOpenChange={(open) => !open && setPendingAction(null)}>
+        <DialogContent className="max-w-sm border-white/15 bg-[#101722] text-foreground">
+          <DialogHeader>
+            <DialogTitle>{pendingAction?.kind === 'delete' ? '항목 삭제' : '작업 재실행'}</DialogTitle>
+            <DialogDescription className="text-foreground/70">
+              {pendingAction?.kind === 'delete'
+                ? `"${pendingAction?.title}" 항목을 삭제합니다. 이 작업은 되돌릴 수 없습니다.`
+                : `"${pendingAction?.title}" 실패 작업을 다시 실행합니다.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <button
+              type="button"
+              onClick={() => setPendingAction(null)}
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-foreground transition hover:bg-white/10"
+              disabled={isActionSubmitting}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmAction}
+              className={`rounded-lg px-3 py-2 text-sm font-semibold text-white transition ${
+                pendingAction?.kind === 'delete'
+                  ? 'bg-red-500/90 hover:bg-red-500'
+                  : 'bg-primary/90 text-primary-foreground hover:bg-primary'
+              } disabled:opacity-60`}
+              disabled={isActionSubmitting}
+            >
+              {isActionSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : pendingAction?.kind === 'delete' ? '삭제' : '재실행'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
