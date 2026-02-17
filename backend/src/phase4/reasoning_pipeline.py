@@ -4,7 +4,7 @@ import sys
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from google import genai
 from google.genai import types
@@ -177,6 +177,17 @@ class ReasoningPipeline:
                 self._enforce_final_report_schema(final_report)
             metrics = self._compute_phase4_metrics(final_report, signals, evidence_candidates, chunks_map)
             self._log(f"Phase4 metrics: {json.dumps(metrics, ensure_ascii=False)}")
+
+            if metrics.get("output_items_total", 0) == 0:
+                final_report.setdefault("warnings", [])
+                final_report["warnings"].append(
+                    "리포트 항목이 모두 검증 단계에서 제외되었습니다. 1개 녹음 파일만 사용한 경우 근거가 부족할 수 있으니 2~3개 이상 업로드 후 다시 생성해 보세요."
+                )
+                missing_signal_count = metrics.get("input_signals_without_evidence")
+                if isinstance(missing_signal_count, int) and missing_signal_count > 0:
+                    final_report["warnings"].append(
+                        f"근거 후보가 없는 신호가 {missing_signal_count}개 있어 일부 항목이 제외되었습니다."
+                    )
             
             # 7. Save Report (Virtual 'All Sessions' Report)
             # Strategy: To make frontend queries simple, we save the SAME report to ALL participating sessions.
@@ -372,6 +383,8 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         valid_keys = ["professor_mentioned", "likely", "trap_warnings"]
         cleaned = {k: [] for k in valid_keys}
         warnings: List[str] = []
+        dropped_counts: Counter[str] = Counter()
+        dropped_examples: List[str] = []
         signal_map = {s["signal_id"]: s for s in signals if s.get("signal_id")}
         
         # Regex to strip (id:...) or (CHUNK id=...) from text
@@ -388,10 +401,23 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
             if not isinstance(items, list): continue
             
             for item in items:
+                def _record_drop(reason: str):
+                    dropped_counts[reason] += 1
+                    if len(dropped_examples) >= 5:
+                        return
+                    raw_title = item.get("title")
+                    title_preview = str(raw_title).strip() if isinstance(raw_title, str) else "(제목 없음)"
+                    if not title_preview:
+                        title_preview = "(제목 없음)"
+                    if len(title_preview) > 32:
+                        title_preview = title_preview[:32] + "..."
+                    dropped_examples.append(f"{key}/{title_preview}: {reason}")
+
                 title = item.get("title")
                 why = item.get("why")
                 if not isinstance(title, str) or not isinstance(why, str):
                     warnings.append(f"{key}: title/why 누락으로 항목 제외")
+                    _record_drop("title/why 누락")
                     continue
 
                 raw_citations = item.get("citations", [])
@@ -410,6 +436,7 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                 # 1. Check Confidence
                 conf = item.get("confidence", 0)
                 if not isinstance(conf, (int, float)) or conf < 0.3:
+                    _record_drop("confidence 0.3 미만")
                     continue
                 conf = float(max(0.0, min(1.0, conf)))
                 
@@ -467,6 +494,12 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 
                 if len(valid_audio_refs) == 0 or len(valid_citations) == 0:
                     warnings.append(f"{key}: 오디오/교재 근거 불충분으로 항목 제외")
+                    if len(valid_audio_refs) == 0 and len(valid_citations) == 0:
+                        _record_drop("오디오/교재 근거 모두 부족")
+                    elif len(valid_audio_refs) == 0:
+                        _record_drop("오디오 근거 부족")
+                    else:
+                        _record_drop("교재 근거 부족")
                     continue
 
                 if self._contains_verbatim_span(why, chunks_map, Config.PHASE4_VERBATIM_WINDOW):
@@ -480,6 +513,14 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
                     "audio_refs": valid_audio_refs,
                     "citations": valid_citations
                 })
+
+        if dropped_counts:
+            total_dropped = sum(dropped_counts.values())
+            summary = ", ".join([f"{reason} {count}개" for reason, count in dropped_counts.items()])
+            warnings.append(f"검증 제외 항목: 총 {total_dropped}개")
+            warnings.append(f"검증 제외 사유: {summary}")
+            if dropped_examples:
+                warnings.append("검증 제외 예시: " + " | ".join(dropped_examples))
 
         cleaned["warnings"] = list(dict.fromkeys(warnings))
         return cleaned
@@ -530,10 +571,21 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
         categories = ["professor_mentioned", "likely", "trap_warnings"]
         item_counts = {k: len(report.get(k, [])) for k in categories}
         all_items: List[Dict[str, Any]] = []
+        input_signal_ids = set()
         for key in categories:
             value = report.get(key, [])
             if isinstance(value, list):
                 all_items.extend(value)
+        for signal in signals:
+            sid = signal.get("signal_id")
+            if sid:
+                input_signal_ids.add(sid)
+
+        evidence_signal_ids = set()
+        for candidate in evidence_candidates:
+            sid = candidate.get("signal_id")
+            if sid:
+                evidence_signal_ids.add(sid)
 
         audio_refs_total = 0
         citations_total = 0
@@ -564,6 +616,8 @@ Your goal is to synthesize audio signals (professor's speech) and textbook refer
 
         return {
             "input_signals": len(signals),
+            "input_signals_with_evidence": len(input_signal_ids & evidence_signal_ids),
+            "input_signals_without_evidence": len(input_signal_ids - evidence_signal_ids),
             "input_evidence_candidates": len(evidence_candidates),
             "input_unique_chunks": len(chunks_map),
             "output_items_total": len(all_items),
