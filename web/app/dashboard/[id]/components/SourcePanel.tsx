@@ -438,7 +438,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-white w-full border-r border-gray-200">
+    <div className="flex h-full w-full flex-col bg-transparent">
       <input 
         type="file" 
         multiple
@@ -449,13 +449,13 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       />
 
       {/* Header - Sidebar Style - Matches Global Rail height approx */}
-      <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200 bg-white shrink-0">
-        <h2 className="text-sm font-semibold text-gray-700">Sources</h2>
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-black/20 px-4">
+        <h2 className="text-sm font-semibold text-foreground">Sources</h2>
         <div className="flex items-center gap-1">
             <button
                 onClick={() => latestReportSessionId && setViewingReportSessionId(latestReportSessionId)}
                 disabled={!latestReportSessionId}
-                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-emerald-600 transition flex items-center gap-1 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex items-center gap-1 rounded-md p-1.5 text-xs font-medium text-foreground/70 transition hover:bg-white/10 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 title={latestReportSessionId ? "Latest Integrated Report" : "아직 생성된 리포트가 없습니다"}
             >
                 <BookOpenCheck className="h-4 w-4" />
@@ -464,7 +464,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             <button 
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploading}
-                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-emerald-600 transition flex items-center gap-1 text-xs font-medium"
+                className="flex items-center gap-1 rounded-md p-1.5 text-xs font-medium text-foreground/70 transition hover:bg-white/10 hover:text-foreground"
                 title="Add Source"
             >
                 <Plus className="h-4 w-4" />
@@ -473,20 +473,20 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         </div>
       </div>
 
-      <div className="border-b border-gray-100 bg-gray-50 px-4 py-2 text-[11px] text-gray-500">
+      <div className="border-b border-white/10 bg-black/10 px-4 py-2 text-[11px] text-foreground/65">
         PDF는 클라이언트에서 Gemini로 직접 업로드되며 원문은 UI에서 열람할 수 없습니다.
       </div>
-      <div className="border-b border-gray-100 bg-gray-50 px-4 py-2 text-[11px] text-gray-500">
+      <div className="border-b border-white/10 bg-black/10 px-4 py-2 text-[11px] text-foreground/65">
         리포트는 선택한 오디오 전체를 통합해 1개로 생성됩니다.
       </div>
 
       {/* Action Bar for Report Generation */}
       {items.some(i => i.type === 'audio' && i.selected) && (
-          <div className="bg-emerald-50/50 p-2 border-b border-emerald-100 animate-in slide-in-from-top-2">
+          <div className="animate-in slide-in-from-top-2 border-b border-primary/20 bg-primary/10 p-2">
               <button 
                 onClick={handleGenerateReport}
                 disabled={isGenerating}
-                className="w-full flex items-center justify-center gap-2 rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-500"
+                className="flex w-full items-center justify-center gap-2 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
               >
                   {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
                   Generate Report ({items.filter(i => i.selected).length})
@@ -497,7 +497,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       <div className="flex-1 overflow-y-auto">
         {items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center px-4">
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-foreground/50">
               No sources yet. Use the + button to add PDFs or Audio.
             </p>
           </div>
@@ -506,24 +506,24 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
             {items.map((item) => (
                 <div 
                     key={item.id} 
-                    className={`group relative flex flex-col border-b border-gray-100 px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer ${item.selected ? 'bg-emerald-50/30' : ''}`}
+                    className={`group relative flex cursor-pointer flex-col border-b border-white/10 px-4 py-3 transition-colors hover:bg-white/5 ${item.selected ? 'bg-primary/10' : ''}`}
                     onClick={() => { if(item.type === 'audio') toggleSelection(item.id) }}
                 >
                     <div className="flex items-start gap-3">
                          {/* Icon */}
-                        <div className="pt-0.5 text-gray-400">
-                            {item.type === 'pdf' ? <FileText className="h-4 w-4 text-gray-500" /> : <FileAudio className="h-4 w-4 text-emerald-600" />}
+                        <div className="pt-0.5 text-foreground/50">
+                            {item.type === 'pdf' ? <FileText className="h-4 w-4 text-foreground/60" /> : <FileAudio className="h-4 w-4 text-primary" />}
                         </div>
                         
                         <div className="flex-1 min-w-0">
                             <div className="flex justify-between items-center mb-0.5">
-                                <p className="text-sm font-medium text-gray-700 truncate group-hover:text-emerald-600 transition-colors" title={item.title}>
+                                <p className="truncate text-sm font-medium text-foreground transition-colors group-hover:text-primary" title={item.title}>
                                     {item.title}
                                 </p>
                             </div>
                             
                             <div className="flex items-center gap-2">
-                                <span className={`text-[10px] ${item.status === 'processing' ? 'text-emerald-600 animate-pulse font-semibold' : 'text-gray-400'}`}>
+                                <span className={`text-[10px] ${item.status === 'processing' ? 'animate-pulse font-semibold text-primary' : 'text-foreground/55'}`}>
                                     {getStatusText(item.status)}
                                 </span>
                                 {getStatusIcon(item.status)}
@@ -532,17 +532,17 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                         type="checkbox" 
                                         checked={!!item.selected}
                                         onChange={(e) => { e.stopPropagation(); toggleSelection(item.id); }}
-                                        className="h-3 w-3 rounded text-emerald-600 focus:ring-emerald-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity"
+                                        className="ml-auto h-3 w-3 rounded border-white/20 bg-transparent text-primary opacity-0 transition-opacity focus:ring-primary group-hover:opacity-100"
                                     />
                                 )}
                             </div>
 
                             {/* Actions Row (Hover only) */}
-                            <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-1 bg-white/90 backdrop-blur rounded px-1 shadow-sm border border-gray-100">
+                            <div className="absolute right-2 top-2 hidden items-center gap-1 rounded border border-white/10 bg-black/55 px-1 backdrop-blur group-hover:flex">
                                 {item.status === 'failed' && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleRetry(item.id, item.type); }}
-                                        className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-indigo-600 transition-colors"
+                                        className="rounded p-1 text-foreground/60 transition-colors hover:bg-white/10 hover:text-foreground"
                                         title="실패 작업 재실행"
                                     >
                                         <RotateCcw className="h-3 w-3" />
@@ -550,7 +550,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                                 )}
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.type); }}
-                                    className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded"
+                                    className="rounded p-1 text-foreground/60 transition-colors hover:bg-red-500/20 hover:text-red-300"
                                     title="항목 삭제"
                                 >
                                     <Trash2 className="h-3 w-3" />
@@ -559,9 +559,9 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
                            
                             {/* Progress bar logic (simplified style) */}
                             {item.type === 'audio' && item.stats && item.status === 'processing' && (
-                                <div className="mt-1 h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                                <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/10">
                                     <div 
-                                        className="h-full bg-emerald-500 transition-all duration-500"
+                                        className="h-full bg-primary transition-all duration-500"
                                         style={{ width: `${Math.round((item.stats.completed / item.stats.total) * 100)}%` }}
                                     />
                                 </div>

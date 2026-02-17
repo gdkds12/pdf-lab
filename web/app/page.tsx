@@ -1,86 +1,312 @@
-import Link from "next/link"
-import { ArrowRight, CheckCircle2, Compass, ShieldCheck, Sparkles } from "lucide-react"
+"use client"
 
-const flow = [
-  "강의 오디오 업로드",
-  "교재 파일 업로드 (세션 한정 처리)",
-  "출제 신호 + 구조 매칭 분석",
-  "학습 우선순위 카드 확인",
-]
+import { Shader, ChromaFlow, Swirl } from "shaders/react"
+import { CustomCursor } from "@/components/custom-cursor"
+import { GrainOverlay } from "@/components/grain-overlay"
+import { WorkSection } from "@/components/sections/work-section"
+import { ServicesSection } from "@/components/sections/services-section"
+import { AboutSection } from "@/components/sections/about-section"
+import { ContactSection } from "@/components/sections/contact-section"
+import { MagneticButton } from "@/components/magnetic-button"
+import { useRef, useEffect, useState } from "react"
 
-const principles = [
-  "교재 원문 장문 제공/재현 차단",
-  "근거 위치(anchor/page/timecode) 중심 안내",
-  "교재 대체가 아닌 학습 방향 최적화",
-]
+export default function Home() {
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [currentSection, setCurrentSection] = useState(0)
+  const [isLoaded, setIsLoaded] = useState(false)
+  const touchStartY = useRef(0)
+  const touchStartX = useRef(0)
+  const shaderContainerRef = useRef<HTMLDivElement>(null)
+  const scrollThrottleRef = useRef<number>()
 
-export default function LandingPage() {
+  useEffect(() => {
+    const checkShaderReady = () => {
+      if (shaderContainerRef.current) {
+        const canvas = shaderContainerRef.current.querySelector("canvas")
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
+          setIsLoaded(true)
+          return true
+        }
+      }
+      return false
+    }
+
+    if (checkShaderReady()) return
+
+    const intervalId = setInterval(() => {
+      if (checkShaderReady()) {
+        clearInterval(intervalId)
+      }
+    }, 100)
+
+    const fallbackTimer = setTimeout(() => {
+      setIsLoaded(true)
+    }, 1500)
+
+    return () => {
+      clearInterval(intervalId)
+      clearTimeout(fallbackTimer)
+    }
+  }, [])
+
+  const scrollToSection = (index: number) => {
+    if (scrollContainerRef.current) {
+      const sectionWidth = scrollContainerRef.current.offsetWidth
+      scrollContainerRef.current.scrollTo({
+        left: sectionWidth * index,
+        behavior: "smooth",
+      })
+      setCurrentSection(index)
+    }
+  }
+
+  useEffect(() => {
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartY.current = e.touches[0].clientY
+      touchStartX.current = e.touches[0].clientX
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (Math.abs(e.touches[0].clientY - touchStartY.current) > 10) {
+        e.preventDefault()
+      }
+    }
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      const touchEndY = e.changedTouches[0].clientY
+      const touchEndX = e.changedTouches[0].clientX
+      const deltaY = touchStartY.current - touchEndY
+      const deltaX = touchStartX.current - touchEndX
+
+      if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 50) {
+        if (deltaY > 0 && currentSection < 4) {
+          scrollToSection(currentSection + 1)
+        } else if (deltaY < 0 && currentSection > 0) {
+          scrollToSection(currentSection - 1)
+        }
+      }
+    }
+
+    const container = scrollContainerRef.current
+    if (container) {
+      container.addEventListener("touchstart", handleTouchStart, { passive: true })
+      container.addEventListener("touchmove", handleTouchMove, { passive: false })
+      container.addEventListener("touchend", handleTouchEnd, { passive: true })
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener("touchstart", handleTouchStart)
+        container.removeEventListener("touchmove", handleTouchMove)
+        container.removeEventListener("touchend", handleTouchEnd)
+      }
+    }
+  }, [currentSection])
+
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault()
+
+        if (!scrollContainerRef.current) return
+
+        scrollContainerRef.current.scrollBy({
+          left: e.deltaY,
+          behavior: "instant",
+        })
+
+        const sectionWidth = scrollContainerRef.current.offsetWidth
+        const newSection = Math.round(scrollContainerRef.current.scrollLeft / sectionWidth)
+        if (newSection !== currentSection) {
+          setCurrentSection(newSection)
+        }
+      }
+    }
+
+    const container = scrollContainerRef.current
+    if (container) {
+      container.addEventListener("wheel", handleWheel, { passive: false })
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener("wheel", handleWheel)
+      }
+    }
+  }, [currentSection])
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (scrollThrottleRef.current) return
+
+      scrollThrottleRef.current = requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) {
+          scrollThrottleRef.current = undefined
+          return
+        }
+
+        const sectionWidth = scrollContainerRef.current.offsetWidth
+        const scrollLeft = scrollContainerRef.current.scrollLeft
+        const newSection = Math.round(scrollLeft / sectionWidth)
+
+        if (newSection !== currentSection && newSection >= 0 && newSection <= 4) {
+          setCurrentSection(newSection)
+        }
+
+        scrollThrottleRef.current = undefined
+      })
+    }
+
+    const container = scrollContainerRef.current
+    if (container) {
+      container.addEventListener("scroll", handleScroll, { passive: true })
+    }
+
+    return () => {
+      if (container) {
+        container.removeEventListener("scroll", handleScroll)
+      }
+      if (scrollThrottleRef.current) {
+        cancelAnimationFrame(scrollThrottleRef.current)
+      }
+    }
+  }, [currentSection])
+
   return (
-    <main className="pb-10 pt-6">
-      <div className="mobile-shell space-y-5">
-        <section className="surface p-5">
-          <p className="inline-flex items-center gap-1 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
-            <Sparkles className="h-3.5 w-3.5" />
-            학습 내비게이션 엔진
-          </p>
-          <h1 className="mt-3 text-2xl font-bold leading-tight">
-            교재를 대체하지 않고, <br />
-            <span className="text-primary">시험 대비 우선순위</span>만 정확히 안내합니다.
-          </h1>
-          <p className="mt-3 text-sm text-muted-foreground">
-            Thunder Navigator는 학기 전체 강의 맥락에서 교수의 출제 신호를 찾아 교재의 어느 위치를 먼저 학습해야 하는지
-            알려줍니다.
-          </p>
+    <main className="cursor-mode relative h-screen w-full overflow-hidden bg-background">
+      <CustomCursor />
+      <GrainOverlay />
 
-          <div className="mt-5 grid grid-cols-1 gap-2">
-            <Link
-              href="/login"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
+      <div
+        ref={shaderContainerRef}
+        className={`fixed inset-0 z-0 transition-opacity duration-700 ${isLoaded ? "opacity-100" : "opacity-0"}`}
+        style={{ contain: "strict" }}
+      >
+        <Shader className="h-full w-full">
+          <Swirl
+            colorA="#1275d8"
+            colorB="#e19136"
+            speed={0.8}
+            detail={0.8}
+            blend={50}
+          />
+          <ChromaFlow
+            baseColor="#0066ff"
+            upColor="#0066ff"
+            downColor="#d1d1d1"
+            leftColor="#e19136"
+            rightColor="#e19136"
+            intensity={0.9}
+            radius={1.8}
+            momentum={25}
+            maskType="alpha"
+            opacity={0.97}
+          />
+        </Shader>
+        <div className="absolute inset-0 bg-black/20" />
+      </div>
+
+      <nav
+        className={`fixed left-0 right-0 top-0 z-50 flex items-center justify-between px-6 py-6 transition-opacity duration-700 md:px-12 ${
+          isLoaded ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <button
+          onClick={() => scrollToSection(0)}
+          className="flex items-center gap-2 transition-transform hover:scale-105"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground/15 backdrop-blur-md transition-all duration-300 hover:scale-110 hover:bg-foreground/25">
+            <span className="font-sans text-xl font-bold text-foreground">T</span>
+          </div>
+          <span className="font-sans text-xl font-semibold tracking-tight text-foreground">Thunder</span>
+        </button>
+
+        <div className="hidden items-center gap-8 md:flex">
+          {["Home", "Evidence", "Pipeline", "Vision", "Contact"].map((item, index) => (
+            <button
+              key={item}
+              onClick={() => scrollToSection(index)}
+              className={`group relative font-sans text-sm font-medium transition-colors ${
+                currentSection === index ? "text-foreground" : "text-foreground/80 hover:text-foreground"
+              }`}
             >
-              지금 시작하기
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center justify-center rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold"
-            >
-              대시보드 보기
-            </Link>
+              {item}
+              <span
+                className={`absolute -bottom-1 left-0 h-px bg-foreground transition-all duration-300 ${
+                  currentSection === index ? "w-full" : "w-0 group-hover:w-full"
+                }`}
+              />
+            </button>
+          ))}
+        </div>
+
+        <MagneticButton variant="secondary" onClick={() => scrollToSection(4)}>
+          Get Started
+        </MagneticButton>
+      </nav>
+
+      <div
+        ref={scrollContainerRef}
+        data-scroll-container
+        className={`relative z-10 flex h-screen overflow-x-auto overflow-y-hidden transition-opacity duration-700 ${
+          isLoaded ? "opacity-100" : "opacity-0"
+        }`}
+        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+      >
+        {/* Hero Section */}
+        <section className="flex min-h-screen w-screen shrink-0 flex-col justify-end px-6 pb-16 pt-24 md:px-12 md:pb-24">
+          <div className="max-w-3xl">
+            <div className="mb-4 inline-block animate-in fade-in slide-in-from-bottom-4 rounded-full border border-foreground/20 bg-foreground/15 px-4 py-1.5 backdrop-blur-md duration-700">
+              <p className="font-mono text-xs text-foreground/90">WebGL Powered Design</p>
+            </div>
+            <h1 className="mb-6 animate-in fade-in slide-in-from-bottom-8 font-sans text-6xl font-light leading-[1.1] tracking-tight text-foreground duration-1000 md:text-7xl lg:text-8xl">
+              <span className="text-balance">
+                Creative experiences
+                <br />
+                in fluid motion
+              </span>
+            </h1>
+            <p className="mb-8 max-w-xl animate-in fade-in slide-in-from-bottom-4 text-lg leading-relaxed text-foreground/90 duration-1000 delay-200 md:text-xl">
+              <span className="text-pretty">
+                Transforming digital spaces with dynamic shader effects and real-time visual experiences that captivate
+                and inspire.
+              </span>
+            </p>
+            <div className="flex animate-in fade-in slide-in-from-bottom-4 flex-col gap-4 duration-1000 delay-300 sm:flex-row sm:items-center">
+              <MagneticButton
+                size="lg"
+                variant="primary"
+                onClick={() => window.open("https://v0.app/templates/R3n0gnvYFbO", "_blank")}
+              >
+                Open in v0
+              </MagneticButton>
+              <MagneticButton size="lg" variant="secondary" onClick={() => scrollToSection(2)}>
+                View Demo
+              </MagneticButton>
+            </div>
+          </div>
+
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in duration-1000 delay-500">
+            <div className="flex items-center gap-2">
+              <p className="font-mono text-xs text-foreground/80">Scroll to explore</p>
+              <div className="flex h-6 w-12 items-center justify-center rounded-full border border-foreground/20 bg-foreground/15 backdrop-blur-md">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-foreground/80" />
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className="surface p-5">
-          <h2 className="flex items-center gap-2 text-base font-semibold">
-            <Compass className="h-4 w-4 text-primary" />
-            사용 흐름
-          </h2>
-          <ul className="mt-3 space-y-2 text-sm">
-            {flow.map((item, index) => (
-              <li key={item} className="flex items-start gap-2">
-                <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
-                  {index + 1}
-                </span>
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="surface p-5">
-          <h2 className="flex items-center gap-2 text-base font-semibold">
-            <ShieldCheck className="h-4 w-4 text-primary" />
-            저작권 안전 설계
-          </h2>
-          <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-            {principles.map((item) => (
-              <li key={item} className="flex items-start gap-2">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 text-primary" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <WorkSection />
+        <ServicesSection />
+        <AboutSection scrollToSection={scrollToSection} />
+        <ContactSection />
       </div>
+
+      <style jsx global>{`
+        div::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
     </main>
   )
 }

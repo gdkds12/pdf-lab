@@ -30,38 +30,38 @@ export default function DashboardLayout({ subject }: { subject: any }) {
   const title = useMemo(() => `${subject.name} 학습 워크스페이스`, [subject.name])
 
   return (
-    <div className="mobile-shell space-y-4 py-4">
-      <section className="surface p-4">
-        <Link href="/dashboard" className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+    <div className="th-shell space-y-5">
+      <section className="th-card">
+        <Link href="/dashboard" className="mb-3 inline-flex items-center gap-1 text-xs font-medium text-foreground/70">
           <ChevronLeft className="h-3.5 w-3.5" /> 과목 목록
         </Link>
-        <h1 className="text-lg font-bold">{title}</h1>
-        <p className="mt-1 text-xs text-muted-foreground">업로드 → 분석 → 우선순위 학습까지 모바일 기준으로 빠르게 진행합니다.</p>
+        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        <p className="mt-1 text-sm text-foreground/70">업로드 → 분석 → 우선순위 학습까지 한 번에 진행합니다.</p>
       </section>
 
-      <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted p-1">
+      <div className="grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur">
         <button
           onClick={() => setTab("sources")}
-          className={`rounded-lg px-2 py-2 text-xs font-semibold ${tab === "sources" ? "bg-card" : "text-muted-foreground"}`}
+          className={`rounded-xl px-2 py-2.5 text-xs font-semibold transition ${tab === "sources" ? "bg-white/15 text-foreground" : "text-foreground/70 hover:bg-white/5"}`}
         >
           자료
         </button>
         <button
           onClick={() => setTab("guidance")}
-          className={`rounded-lg px-2 py-2 text-xs font-semibold ${tab === "guidance" ? "bg-card" : "text-muted-foreground"}`}
+          className={`rounded-xl px-2 py-2.5 text-xs font-semibold transition ${tab === "guidance" ? "bg-white/15 text-foreground" : "text-foreground/70 hover:bg-white/5"}`}
         >
           우선순위
         </button>
         <button
           onClick={() => setTab("policy")}
-          className={`rounded-lg px-2 py-2 text-xs font-semibold ${tab === "policy" ? "bg-card" : "text-muted-foreground"}`}
+          className={`rounded-xl px-2 py-2.5 text-xs font-semibold transition ${tab === "policy" ? "bg-white/15 text-foreground" : "text-foreground/70 hover:bg-white/5"}`}
         >
           안전정책
         </button>
       </div>
 
       {tab === "sources" && (
-        <section className="surface overflow-hidden">
+        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl">
           <SourcePanel subjectId={subject.subject_id} />
         </section>
       )}
@@ -69,13 +69,13 @@ export default function DashboardLayout({ subject }: { subject: any }) {
       {tab === "guidance" && (
         <section className="space-y-3">
           {priorityCards.map((card) => (
-            <article key={card.title} className="surface p-4">
+            <article key={card.title} className="th-card">
               <p className="text-xs font-semibold text-primary">Priority {card.level}</p>
-              <h2 className="mt-1 flex items-center gap-2 text-sm font-semibold">
+              <h2 className="mt-1 flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Compass className="h-4 w-4" />
                 {card.title}
               </h2>
-              <p className="mt-2 text-xs text-muted-foreground">{card.action}</p>
+              <p className="mt-2 text-sm text-foreground/70">{card.action}</p>
             </article>
           ))}
           <ChatInterface />
@@ -83,11 +83,11 @@ export default function DashboardLayout({ subject }: { subject: any }) {
       )}
 
       {tab === "policy" && (
-        <section className="surface p-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <section className="th-card">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <ShieldCheck className="h-4 w-4 text-primary" /> 저작권/출력 정책
           </h2>
-          <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+          <ul className="mt-3 space-y-2 text-sm text-foreground/70">
             <li className="flex items-start gap-2">
               <BookMarked className="mt-0.5 h-4 w-4 text-primary" />
               교재 원문 장문 제공 및 재구성 요약은 차단됩니다.

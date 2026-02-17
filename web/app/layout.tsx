@@ -16,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      <body className="antialiased">
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         {children}
         <Analytics />
       </body>

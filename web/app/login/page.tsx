@@ -2,7 +2,9 @@
 
 import { login, signup, signInWithGoogle } from './actions'
 import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Sparkles } from 'lucide-react'
+import Link from 'next/link'
+import { GrainOverlay } from '@/components/grain-overlay'
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
@@ -43,18 +45,33 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen py-6">
-      <div className="mobile-shell">
-        <div className="surface p-5">
-          <p className="text-xs font-semibold text-primary">Thunder Navigator</p>
-          <h1 className="mt-2 text-xl font-bold">학습 내비게이션 시작하기</h1>
-          <p className="mt-1 text-sm text-muted-foreground">로그인 후 과목을 만들고 오디오+교재 분석을 시작하세요.</p>
+    <main className="relative min-h-screen overflow-hidden bg-background">
+      <GrainOverlay />
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 top-20 h-72 w-72 rounded-full bg-[#1275d8]/30 blur-3xl" />
+        <div className="absolute -right-20 bottom-0 h-80 w-80 rounded-full bg-[#e19136]/20 blur-3xl" />
+      </div>
 
-          <form onSubmit={handleSubmit} className="mt-5 space-y-3">
-            <label className="block text-sm font-medium">
+      <div className="th-shell flex min-h-screen items-center justify-center">
+        <div className="th-card w-full max-w-md">
+          <div className="mb-6 flex items-center justify-between">
+            <p className="th-pill inline-flex items-center gap-1">
+              <Sparkles className="h-3.5 w-3.5" />
+              Thunder Navigator
+            </p>
+            <Link href="/" className="text-xs text-foreground/70 transition hover:text-foreground">
+              홈으로
+            </Link>
+          </div>
+
+          <h1 className="text-2xl font-semibold tracking-tight">학습 내비게이션 시작하기</h1>
+          <p className="mt-2 text-sm text-foreground/70">로그인 후 과목을 만들고 오디오/교재 분석을 시작하세요.</p>
+
+          <form onSubmit={handleSubmit} className="mt-6 space-y-3">
+            <label className="block text-sm font-medium text-foreground/90">
               이메일
               <input
-                className="mt-1 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
+                className="mt-1 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm placeholder:text-foreground/40 focus:border-primary focus:outline-none"
                 id="email"
                 name="email"
                 type="email"
@@ -63,10 +80,10 @@ export default function LoginPage() {
               />
             </label>
 
-            <label className="block text-sm font-medium">
+            <label className="block text-sm font-medium text-foreground/90">
               비밀번호
               <input
-                className="mt-1 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
+                className="mt-1 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm placeholder:text-foreground/40 focus:border-primary focus:outline-none"
                 id="password"
                 name="password"
                 type="password"
@@ -74,8 +91,8 @@ export default function LoginPage() {
               />
             </label>
 
-            {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
-            {message && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-600">{message}</p>}
+            {error && <p className="rounded-xl border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">{error}</p>}
+            {message && <p className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{message}</p>}
 
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
@@ -89,7 +106,7 @@ export default function LoginPage() {
                 로그인
               </button>
               <button
-                className="rounded-xl border border-border bg-card px-3 py-2.5 text-sm font-semibold disabled:opacity-60"
+                className="rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-foreground disabled:opacity-60"
                 type="submit"
                 name="action"
                 value="signup"
@@ -102,7 +119,7 @@ export default function LoginPage() {
 
           <button
             type="button"
-            className="mt-3 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm font-semibold disabled:opacity-60"
+            className="mt-3 w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-foreground transition hover:bg-white/10 disabled:opacity-60"
             onClick={handleGoogleLogin}
             disabled={loading}
           >

@@ -36,28 +36,28 @@ export default function AddSubjectModal({ buttonOnly = false }: { buttonOnly?: b
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="gap-2">
+        <Button className="gap-2 rounded-xl bg-primary/90 hover:bg-primary">
             <Plus className="h-4 w-4" />
-            Add Subject
+            과목 추가
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Add New Subject</DialogTitle>
+          <DialogTitle>새 과목 만들기</DialogTitle>
           <DialogDescription>
-            Create a new subject to start tracking your exams and materials.
+            분석할 과목 이름을 입력하고 워크스페이스를 생성합니다.
           </DialogDescription>
         </DialogHeader>
         <form action={onSubmit}>
             <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="name" className="text-right">
-                Name
+                이름
                 </Label>
                 <Input
                     id="name"
                     name="name"
-                    placeholder="e.g., Electromagnetics"
+                    placeholder="예: 회로이론"
                     className="col-span-3"
                     required
                 />
@@ -66,7 +66,7 @@ export default function AddSubjectModal({ buttonOnly = false }: { buttonOnly?: b
             <DialogFooter>
             <Button type="submit" disabled={loading}>
                  {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Create Subject
+                생성
             </Button>
             </DialogFooter>
         </form>
