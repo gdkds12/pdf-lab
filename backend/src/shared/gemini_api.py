@@ -1,6 +1,8 @@
 import json
 import logging
 import time
+import itertools
+import threading
 from typing import Iterable, List, Optional
 
 from google import genai
@@ -15,18 +17,67 @@ class GeminiBatchError(RuntimeError):
     pass
 
 
-def require_gemini_api_key() -> str:
-    api_key = (Config.GEMINI_API_KEY or "").strip()
-    if not api_key:
+_client_cache = {}
+_client_cache_lock = threading.Lock()
+_rr_counter = itertools.count()
+
+
+def _collect_gemini_api_keys() -> List[str]:
+    keys: List[str] = []
+
+    primary = (Config.GEMINI_API_KEY or "").strip()
+    secondary = (Config.GEMINI_API_KEY_SECONDARY or "").strip()
+    if primary:
+        keys.append(primary)
+    if secondary:
+        keys.append(secondary)
+
+    csv_keys = (Config.GEMINI_API_KEYS or "").strip()
+    if csv_keys:
+        keys.extend([k.strip() for k in csv_keys.split(",") if k.strip()])
+
+    # Deduplicate while preserving order.
+    deduped: List[str] = []
+    seen = set()
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def require_gemini_api_keys() -> List[str]:
+    keys = _collect_gemini_api_keys()
+    if not keys:
         raise RuntimeError(
-            "GEMINI_API_KEY is required for Gemini API calls. "
-            "Set GEMINI_API_KEY in runtime environment."
+            "At least one Gemini API key is required. "
+            "Set GEMINI_API_KEY (and optionally GEMINI_API_KEY_SECONDARY / GEMINI_API_KEYS)."
         )
-    return api_key
+    return keys
 
 
-def get_gemini_api_client() -> genai.Client:
-    return genai.Client(api_key=require_gemini_api_key())
+def _pick_api_key(keys: List[str], shard_key: Optional[str]) -> str:
+    if len(keys) == 1:
+        return keys[0]
+    if shard_key:
+        idx = abs(hash(str(shard_key))) % len(keys)
+        return keys[idx]
+    idx = next(_rr_counter) % len(keys)
+    return keys[idx]
+
+
+def get_gemini_api_client(shard_key: Optional[str] = None) -> genai.Client:
+    keys = require_gemini_api_keys()
+    selected = _pick_api_key(keys, shard_key)
+
+    with _client_cache_lock:
+        cached = _client_cache.get(selected)
+        if cached is not None:
+            return cached
+        client = genai.Client(api_key=selected)
+        _client_cache[selected] = client
+        return client
 
 
 def normalize_model_name(model_name: str) -> str:

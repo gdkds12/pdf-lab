@@ -27,6 +27,7 @@
   - Phase 2 STT/신호추출: Vertex SDK 호출 대신 Gemini API 호출
   - Gemini Batch API 기반 그룹 처리 + in-flight 동시 처리
   - 글로벌 endpoint 사용 (`GEMINI_LOCATION=global`)
+  - 다중 프로젝트 API 키 샤딩 지원 (`GEMINI_API_KEY`, `GEMINI_API_KEY_SECONDARY`)
 - Cloud Run Job 운영값 조정
   - `INGEST_BATCH_PAGES=10`
   - `PHASE1_SCANNED_MAX_WORKERS=8`

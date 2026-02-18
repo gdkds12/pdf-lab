@@ -137,7 +137,8 @@ def _run_phase2_batch_group(
     model_name: str,
 ):
     supabase = get_supabase_client()
-    client = get_gemini_api_client()
+    first_chunk_id = group[0]["chunk_id"] if group else "phase2-batch"
+    client = get_gemini_api_client(shard_key=f"p2-batch:{first_chunk_id}")
     requests: List[types.InlinedRequest] = []
     metas: List[Dict[str, Any]] = []
     failed_ids: List[str] = []
@@ -439,7 +440,7 @@ def _call_gemini_extraction(
     subject: str,
     exam_window: str
 ) -> List[Dict[str, Any]]:
-    client = get_gemini_api_client()
+    client = get_gemini_api_client(shard_key=f"p2-sync:{audio_chunk_id}")
     model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
     prompt = _build_user_prompt(session_id, audio_chunk_id, subject, exam_window)
     audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)

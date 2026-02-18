@@ -271,7 +271,8 @@ class IngestPipeline:
         return all_pages_data
 
     def _run_ocr_batch_group(self, group: List[Dict[str, int]], model_name: str) -> Dict[int, List[Dict]]:
-        client = get_gemini_api_client()
+        shard = f"p1:{self.source_id}:{group[0]['start_page'] if group else 0}"
+        client = get_gemini_api_client(shard_key=shard)
         requests: List[types.InlinedRequest] = []
         metas: List[Dict[str, int]] = []
 
@@ -385,7 +386,7 @@ class IngestPipeline:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
         logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
-        client = get_gemini_api_client()
+        client = get_gemini_api_client(shard_key=f"p1-sync:{self.source_id}:{start_page_offset}")
         model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
         prompt = self._build_ocr_prompt(start_page_offset, expected_count)
         part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")

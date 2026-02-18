@@ -19,6 +19,9 @@ class Config:
     GEMINI_LOCATION = os.getenv("GEMINI_LOCATION", "global")
     GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-lite")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_API_KEY_SECONDARY = os.getenv("GEMINI_API_KEY_SECONDARY")
+    # Optional comma-separated key list for multi-project quota sharding.
+    GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
     # FORCE UPDATE TIMESTAMP 2026-01-14 16:30
     # Falling back to known valid Thinking Model
     REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-2.5-flash-lite")
