@@ -174,6 +174,11 @@ def process_chunks_locally(chunks: List[Dict], subject: str, exam_window: str):
     """
     Process chunks using ThreadPoolExecutor within this same container.
     """
+    if Config.PHASE2_USE_BATCH_API:
+        logger.info(
+            f"Processing chunks with Gemini Batch API (group_size={Config.PHASE2_BATCH_REQUESTS_PER_JOB})"
+        )
+        return signal_extraction.process_chunks_with_batch(chunks, subject, exam_window)
     
     failed_ids: List[str] = []
     processed_count = 0

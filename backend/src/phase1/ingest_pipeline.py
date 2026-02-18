@@ -1,10 +1,9 @@
 import logging
-import json
 import os
 import sys
 import fitz  # PyMuPDF
 import vertexai
-from vertexai.generative_models import GenerativeModel, Part
+from google.genai import types
 from vertexai.language_models import TextEmbeddingModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import List, Dict, Any, Optional
@@ -14,6 +13,13 @@ import json_repair  # Import json_repair
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.gemini_api import (
+    chunked,
+    extract_generate_content_text,
+    get_gemini_api_client,
+    normalize_model_name,
+    wait_for_batch_completion,
+)
 from src.shared.storage import StorageClient
 from src.shared.validation import parse_payload, require_gcs_uri, require_uuid
 
@@ -171,6 +177,10 @@ class IngestPipeline:
 
             doc.close()
 
+            if Config.PHASE1_USE_BATCH_API:
+                logger.info("Using Gemini Batch API for scanned OCR.")
+                return self._process_scanned_batch(tasks)
+
             # Execute in bounded parallelism.
             all_pages_data = []
             max_workers = max(1, min(len(tasks), Config.PHASE1_SCANNED_MAX_WORKERS))
@@ -233,28 +243,130 @@ class IngestPipeline:
             logger.error(f"Scanned processing failed: {e}")
             raise
 
-    def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
-        expected_count = end_page - start_page
+    def _process_scanned_batch(self, tasks: List[Dict[str, int]]) -> List[Dict]:
+        if not tasks:
+            return []
+
+        model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
+        results_map: Dict[int, List[Dict]] = {}
+        group_size = max(1, Config.PHASE1_BATCH_REQUESTS_PER_JOB)
+        groups = list(chunked(tasks, group_size))
+        max_inflight = max(1, min(len(groups), Config.PHASE1_BATCH_MAX_INFLIGHT_JOBS))
+
+        logger.info(
+            f"OCR batch mode: groups={len(groups)}, group_size={group_size}, max_inflight={max_inflight}"
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_inflight) as executor:
+            future_to_group = {
+                executor.submit(self._run_ocr_batch_group, group, model_name): group
+                for group in groups
+            }
+            for future in concurrent.futures.as_completed(future_to_group):
+                group_results = future.result()
+                results_map.update(group_results)
+
+        all_pages_data: List[Dict] = []
+        for sp in sorted(results_map.keys()):
+            all_pages_data.extend(results_map[sp])
+        return all_pages_data
+
+    def _run_ocr_batch_group(self, group: List[Dict[str, int]], model_name: str) -> Dict[int, List[Dict]]:
+        client = get_gemini_api_client()
+        requests: List[types.InlinedRequest] = []
+        metas: List[Dict[str, int]] = []
+
+        for task in group:
+            start_page = task["start_page"]
+            end_page = task["end_page"]
+            expected_count = end_page - start_page
+            pdf_bytes = self._extract_pdf_bytes_for_range(start_page, end_page)
+            prompt = self._build_ocr_prompt(start_page + 1, expected_count)
+            requests.append(
+                types.InlinedRequest(
+                    contents=[
+                        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+                        types.Part.from_text(text=prompt),
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        max_output_tokens=64000,
+                        temperature=0.0,
+                    ),
+                )
+            )
+            metas.append(
+                {
+                    "start_page": start_page,
+                    "end_page": end_page,
+                    "expected_count": expected_count,
+                }
+            )
+
+        batch_job = client.batches.create(
+            model=model_name,
+            src=requests,
+            config=types.CreateBatchJobConfig(
+                display_name=f"p1-ocr-{self.source_id[:8]}-{uuid.uuid4().hex[:6]}"
+            ),
+        )
+        logger.info(f"Created OCR batch job: {batch_job.name}")
+        completed = wait_for_batch_completion(
+            client=client,
+            batch_name=batch_job.name,
+            timeout_sec=Config.GEMINI_BATCH_TIMEOUT_SEC,
+            poll_interval_sec=Config.GEMINI_BATCH_POLL_SEC,
+        )
+
+        responses = list((completed.dest and completed.dest.inlined_responses) or [])
+        if len(responses) != len(metas):
+            raise RuntimeError(
+                f"OCR batch response count mismatch. expected={len(metas)}, got={len(responses)}"
+            )
+
+        group_results: Dict[int, List[Dict]] = {}
+        for idx, inlined_response in enumerate(responses):
+            meta = metas[idx]
+            start_page = meta["start_page"]
+            end_page = meta["end_page"]
+            expected_count = meta["expected_count"]
+
+            if getattr(inlined_response, "error", None):
+                err = getattr(inlined_response.error, "message", None) or str(inlined_response.error)
+                raise RuntimeError(f"OCR batch request failed for pages {start_page+1}-{end_page}: {err}")
+
+            text = extract_generate_content_text(getattr(inlined_response, "response", None))
+            logger.info(
+                f"OCR batch response pages {start_page+1}-{end_page}: "
+                f"{(text or '')[:300]}..."
+            )
+            if not text:
+                raise RuntimeError(f"Empty OCR response for pages {start_page+1}-{end_page}")
+
+            data = json_repair.loads(text)
+            pages = data.get("pages", [])
+            if len(pages) != expected_count:
+                raise ValueError(
+                    f"OCR batch incomplete pages {start_page+1}-{end_page}: "
+                    f"expected={expected_count}, got={len(pages)}"
+                )
+            group_results[start_page] = pages
+
+        return group_results
+
+    def _extract_pdf_bytes_for_range(self, start_page: int, end_page: int) -> bytes:
         with fitz.open(self.local_pdf_path) as doc:
             new_doc = fitz.open()
             new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
             pdf_bytes = new_doc.tobytes()
             new_doc.close()
-        return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
+        return pdf_bytes
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
-        logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
-        # OCR generation calls should use Gemini global endpoint.
-        vertexai.init(project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
-        model = GenerativeModel(Config.GEMINI_MODEL_NAME)
-        
-        # Prompt as per documentation
-        prompt = f"""
-        You are a highly accurate OCR engine. 
+    def _build_ocr_prompt(self, start_page_offset: int, expected_count: int) -> str:
+        return f"""
+        You are a highly accurate OCR engine.
         Extract text from the attached PDF pages.
         RETURN JSON ONLY. No markdown fencing.
-        
+
         Requirements:
         1. Output format must be: {{ "pages": [ {{ "page_num": <integer>, "markdown": "<content>" }}, ... ] }}
         2. "page_num" must be adjusted relative to the start page: {start_page_offset}.
@@ -264,19 +376,30 @@ class IngestPipeline:
         5. Preserve equations as LaTeX.
         6. Do not miss any page. Return exactly {expected_count} pages.
         """
+
+    def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
+        expected_count = end_page - start_page
+        pdf_bytes = self._extract_pdf_bytes_for_range(start_page, end_page)
+        return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
+        logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
+        client = get_gemini_api_client()
+        model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
+        prompt = self._build_ocr_prompt(start_page_offset, expected_count)
+        part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
         
-        # Gemini 2.5 accepts PDF parts directly
-        part = Part.from_data(data=pdf_bytes, mime_type="application/pdf")
-        
-        # Wrapper to enforce timeout since vertexai doesn't support it natively
+        # Wrapper to enforce timeout around sync API call.
         def _generate():
-            return model.generate_content(
-                [part, prompt],
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "max_output_tokens": 64000
-                },
-                stream=False
+            return client.models.generate_content(
+                model=model_name,
+                contents=[part, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    max_output_tokens=64000,
+                    temperature=0.0,
+                ),
             )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as request_executor:
@@ -287,7 +410,7 @@ class IngestPipeline:
                 raise TimeoutError(f"Gemini API call timed out after {Config.PHASE1_OCR_TIMEOUT_SEC} seconds for batch {start_page_offset}")
         
         try:
-            text = response.text
+            text = response.text or extract_generate_content_text(response)
             logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
             
             # Use json_repair to handle potential truncated JSON or formatting issues
