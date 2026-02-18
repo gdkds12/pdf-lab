@@ -2,9 +2,7 @@ import logging
 import os
 import sys
 import fitz  # PyMuPDF
-import vertexai
 from google.genai import types
-from vertexai.language_models import TextEmbeddingModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import List, Dict, Any, Optional
 import uuid
@@ -32,9 +30,6 @@ class IngestPipeline:
         self.local_pdf_path = f"/tmp/{uuid.uuid4()}.pdf"
         self.storage_client = StorageClient()
         self.supabase = get_supabase_client()
-        
-        # Init Vertex AI
-        vertexai.init(project=Config.GCP_PROJECT, location=Config.VERTEX_LOCATION)
         
     def run(self):
         try:
@@ -479,24 +474,29 @@ class IngestPipeline:
 
     def _embed_chunks(self, chunks: List[Dict]) -> List[Dict]:
         logger.info("Step 5: Embedding...")
-        # Embedding model remains on Vertex regional endpoint.
-        vertexai.init(project=Config.GCP_PROJECT, location=Config.VERTEX_LOCATION)
-        model = TextEmbeddingModel.from_pretrained(Config.EMBEDDING_MODEL_NAME)
-        
+
         batch_size = Config.EMBED_BATCH_SIZE
-        
+
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
             texts = [c["content_text"] for c in batch]
-            
+
             try:
-                # Vertex AI Embedding
-                embeddings = model.get_embeddings(texts)
+                client = get_gemini_api_client(shard_key=f"p1-embed:{self.source_id}:{i // max(1, batch_size)}")
+                response = client.models.embed_content(
+                    model=Config.EMBEDDING_MODEL_NAME,
+                    contents=texts,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                )
+                embeddings = list(getattr(response, "embeddings", None) or [])
+                if len(embeddings) != len(batch):
+                    raise RuntimeError(
+                        f"Embedding count mismatch at batch {i}: expected={len(batch)}, got={len(embeddings)}"
+                    )
                 for j, embedding in enumerate(embeddings):
-                    batch[j]["embedding"] = embedding.values
+                    batch[j]["embedding"] = list(embedding.values)
             except Exception as e:
                 logger.error(f"Embedding failed for batch {i}: {e}")
-                # Optional: Partial retry logic could go here
                 raise
                 
         return chunks

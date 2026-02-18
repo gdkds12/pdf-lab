@@ -6,12 +6,12 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from collections import defaultdict, Counter
 
-from google import genai
 from google.genai import types
 from jsonschema import Draft202012Validator
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.gemini_api import get_gemini_api_client
 from src.shared.validation import parse_payload, require_uuid, require_uuid_list
 from src.phase3.retrieval_pipeline import RetrievalPipeline
 
@@ -91,9 +91,7 @@ class ReasoningPipeline:
         self.logs_buffer = []
         self.supabase = get_supabase_client()
         self.final_report_validator = Draft202012Validator(FINAL_REPORT_SCHEMA)
-        # Initialize Google GenAI Client for Gemini 3.0 Thinking Mode
-        # Use GEMINI_LOCATION (e.g. us-central1) specifically for Thinking Mode availability
-        self.client = genai.Client(vertexai=True, project=Config.GCP_PROJECT, location=Config.GEMINI_LOCATION)
+        self.client = get_gemini_api_client(shard_key=f"p4:{','.join(self.session_ids)}")
 
     def _log(self, message: str):
         logger.info(message)

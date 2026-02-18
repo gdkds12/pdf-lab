@@ -23,8 +23,10 @@
   - 스캔 OCR 병렬도 상한 도입(메모리 폭주 방지)
   - 배치 단위 온디맨드 처리로 메모리 압력 완화
 - Gemini API 전환
-  - Phase 1 OCR: Vertex SDK 호출 대신 Gemini API 호출
-  - Phase 2 STT/신호추출: Vertex SDK 호출 대신 Gemini API 호출
+  - Phase 1 OCR + 임베딩: Gemini API 호출
+  - Phase 2 STT/신호추출: Gemini API 호출
+  - Phase 3 쿼리 임베딩: Gemini API 호출
+  - Phase 4 추론: Gemini API 호출 (`gemini-3-pro-preview`)
   - 운영 기본 모드: 일반 `generateContent` 호출 (non-batch)
   - Batch API 경로는 비활성 기본값으로 유지(필요 시 플래그로만 활성화)
   - 글로벌 endpoint 사용 (`GEMINI_LOCATION=global`)

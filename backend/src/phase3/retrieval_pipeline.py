@@ -5,10 +5,11 @@ from typing import List, Dict
 from collections import defaultdict
 
 from tenacity import retry, stop_after_attempt, wait_exponential
-from vertexai.language_models import TextEmbeddingModel
+from google.genai import types
 
 from src.shared.config import Config
 from src.shared.db import get_supabase_client
+from src.shared.gemini_api import get_gemini_api_client
 from src.shared.validation import parse_payload, require_uuid
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,6 @@ class RetrievalPipeline:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.supabase = get_supabase_client()
-        self.embedding_model = TextEmbeddingModel.from_pretrained(Config.EMBEDDING_MODEL_NAME)
 
     def run(self):
         try:
@@ -120,21 +120,26 @@ class RetrievalPipeline:
         return response.data
 
     def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
-        # Vertex AI Embedding API supports batching
-        # Batch size 8 is safe default
         batch_size = Config.EMBED_BATCH_SIZE
         all_embeddings = []
         
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i+batch_size]
             try:
-                embeddings = self.embedding_model.get_embeddings(batch)
-                all_embeddings.extend([e.values for e in embeddings])
+                client = get_gemini_api_client(shard_key=f"p3-embed:{self.session_id}:{i // max(1, batch_size)}")
+                response = client.models.embed_content(
+                    model=Config.EMBEDDING_MODEL_NAME,
+                    contents=batch,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+                )
+                embeddings = list(getattr(response, "embeddings", None) or [])
+                if len(embeddings) != len(batch):
+                    raise RuntimeError(
+                        f"Embedding count mismatch at batch {i}: expected={len(batch)}, got={len(embeddings)}"
+                    )
+                all_embeddings.extend([list(e.values) for e in embeddings])
             except Exception as e:
                 logger.error(f"Embedding generation failed batch {i}: {e}")
-                # Fallback: fill with None or zeros? Better to raise or skip.
-                # If we skip, indices won't match. 
-                # We simply re-raise for now.
                 raise e
         
         return all_embeddings

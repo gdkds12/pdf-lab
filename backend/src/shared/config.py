@@ -22,9 +22,7 @@ class Config:
     GEMINI_API_KEY_SECONDARY = os.getenv("GEMINI_API_KEY_SECONDARY")
     # Optional comma-separated key list for multi-project quota sharding.
     GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
-    # FORCE UPDATE TIMESTAMP 2026-01-14 16:30
-    # Falling back to known valid Thinking Model
-    REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-2.5-flash-lite")
+    REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-3-pro-preview")
 
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
     VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
@@ -32,14 +30,14 @@ class Config:
     
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
-    EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "8"))
-    PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "12"))
+    EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "16"))
+    PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "16"))
     PHASE1_OCR_TIMEOUT_SEC = int(os.getenv("PHASE1_OCR_TIMEOUT_SEC", "90"))
     PHASE1_USE_BATCH_API = os.getenv("PHASE1_USE_BATCH_API", "false").lower() in ("1", "true", "yes")
     PHASE1_BATCH_REQUESTS_PER_JOB = int(os.getenv("PHASE1_BATCH_REQUESTS_PER_JOB", "10"))
     PHASE1_BATCH_MAX_INFLIGHT_JOBS = int(os.getenv("PHASE1_BATCH_MAX_INFLIGHT_JOBS", "3"))
-    PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "2"))
-    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "4"))
+    PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "8"))
+    PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "12"))
     PHASE2_USE_BATCH_API = os.getenv("PHASE2_USE_BATCH_API", "false").lower() in ("1", "true", "yes")
     PHASE2_BATCH_REQUESTS_PER_JOB = int(os.getenv("PHASE2_BATCH_REQUESTS_PER_JOB", "10"))
     PHASE2_BATCH_MAX_INFLIGHT_JOBS = int(os.getenv("PHASE2_BATCH_MAX_INFLIGHT_JOBS", "3"))
