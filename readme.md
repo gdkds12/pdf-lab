@@ -3,7 +3,7 @@
 강의 근거 기반 교재 문제 추천 엔진(MVP) 프로젝트입니다.  
 현재 전략은 "시험문제 예측"이 아니라 "근거 기반 추천 큐"입니다.
 
-## 현재 구현 상태 (2026-02-17 기준)
+## 현재 구현 상태 (2026-02-18 기준)
 
 - Phase 1 완료: PDF OCR/구조화/chunk/embedding 파이프라인 운영 중
 - Phase 2 완료: 오디오 신호 추출(Map) 운영 중
@@ -22,6 +22,11 @@
 - Phase 1
   - 스캔 OCR 병렬도 상한 도입(메모리 폭주 방지)
   - 배치 단위 온디맨드 처리로 메모리 압력 완화
+- Gemini API 전환
+  - Phase 1 OCR: Vertex SDK 호출 대신 Gemini API 호출
+  - Phase 2 STT/신호추출: Vertex SDK 호출 대신 Gemini API 호출
+  - Gemini Batch API 기반 그룹 처리 + in-flight 동시 처리
+  - 글로벌 endpoint 사용 (`GEMINI_LOCATION=global`)
 - Cloud Run Job 운영값 조정
   - `INGEST_BATCH_PAGES=10`
   - `PHASE1_SCANNED_MAX_WORKERS=8`
@@ -32,7 +37,8 @@
 - GCP Project: `pdf-lab-468815`
 - Cloud Run Job: `thunder-worker` (`asia-northeast3`)
 - Cloud Run Job Generation: `78`
-- 모델: `gemini-2.5-flash-lite`(Vertex AI)
+- 모델: `gemini-2.5-flash-lite`
+- Phase 1/2 호출 경로: Gemini API(+Batch), Phase 3 임베딩은 Vertex 유지
 
 ## 쿼터 상향 요청 현황 (접수 완료)
 
