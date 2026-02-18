@@ -4,7 +4,7 @@ import sys
 import fitz  # PyMuPDF
 from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import concurrent.futures
 import json_repair  # Import json_repair
@@ -340,12 +340,32 @@ class IngestPipeline:
 
             data = json_repair.loads(text)
             pages = data.get("pages", [])
-            if len(pages) != expected_count:
+            normalized_pages, info = self._normalize_ocr_pages(
+                raw_pages=pages,
+                start_page_offset=start_page + 1,
+                expected_count=expected_count,
+            )
+            if normalized_pages is None:
                 raise ValueError(
-                    f"OCR batch incomplete pages {start_page+1}-{end_page}: "
-                    f"expected={expected_count}, got={len(pages)}"
+                    f"OCR batch incomplete pages {start_page+1}-{end_page}: expected={expected_count}, "
+                    f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
+                    f"dropped_duplicate={info['dropped_duplicate']}"
                 )
-            group_results[start_page] = pages
+
+            if len(pages) != expected_count or info["used_fallback_sequential"]:
+                logger.warning(
+                    "OCR batch normalization applied for pages %s-%s: raw=%s expected=%s "
+                    "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s",
+                    start_page + 1,
+                    end_page,
+                    len(pages),
+                    expected_count,
+                    info["dropped_out_of_range"],
+                    info["dropped_duplicate"],
+                    info["used_fallback_sequential"],
+                )
+
+            group_results[start_page] = normalized_pages
 
         return group_results
 
@@ -372,6 +392,79 @@ class IngestPipeline:
         5. Preserve equations as LaTeX.
         6. Do not miss any page. Return exactly {expected_count} pages.
         """
+
+    def _normalize_ocr_pages(
+        self,
+        raw_pages: List[Dict[str, Any]],
+        start_page_offset: int,
+        expected_count: int,
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any]]:
+        """
+        Normalize OCR page outputs.
+        - Accept extra pages by selecting expected page range only.
+        - Retry only when pages are insufficient after normalization.
+        """
+        expected_nums = list(range(start_page_offset, start_page_offset + expected_count))
+        expected_set = set(expected_nums)
+        info = {
+            "input_count": len(raw_pages),
+            "dropped_out_of_range": 0,
+            "dropped_duplicate": 0,
+            "used_fallback_sequential": False,
+        }
+
+        by_page_num: Dict[int, Dict[str, Any]] = {}
+        parsed_in_order: List[Dict[str, Any]] = []
+
+        for idx, page in enumerate(raw_pages):
+            if not isinstance(page, dict):
+                continue
+            markdown = page.get("markdown")
+            if markdown is None:
+                markdown = ""
+            if not isinstance(markdown, str):
+                markdown = str(markdown)
+
+            page_num_raw = page.get("page_num")
+            page_num: Optional[int] = None
+            try:
+                page_num = int(page_num_raw)
+            except (TypeError, ValueError):
+                page_num = None
+
+            parsed = {"index": idx, "page_num": page_num, "markdown": markdown}
+            parsed_in_order.append(parsed)
+
+            if page_num is None:
+                continue
+            if page_num not in expected_set:
+                info["dropped_out_of_range"] += 1
+                continue
+            if page_num in by_page_num:
+                info["dropped_duplicate"] += 1
+                continue
+            by_page_num[page_num] = {"page_num": page_num, "markdown": markdown}
+
+        # Preferred: exact expected range by page number.
+        if all(num in by_page_num for num in expected_nums):
+            normalized = [by_page_num[num] for num in expected_nums]
+            return normalized, info
+
+        # Fallback: use first N parsed entries and remap sequential page numbers.
+        if len(parsed_in_order) >= expected_count:
+            normalized: List[Dict[str, Any]] = []
+            for i in range(expected_count):
+                normalized.append(
+                    {
+                        "page_num": expected_nums[i],
+                        "markdown": parsed_in_order[i]["markdown"],
+                    }
+                )
+            info["used_fallback_sequential"] = True
+            return normalized, info
+
+        # Insufficient pages after normalization -> retry path.
+        return None, info
 
     def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
         expected_count = end_page - start_page
@@ -412,11 +505,31 @@ class IngestPipeline:
             # Use json_repair to handle potential truncated JSON or formatting issues
             data = json_repair.loads(text)
             pages = data.get("pages", [])
-            
-            if len(pages) != expected_count:
-                raise ValueError(f"Batch incomplete: Expected {expected_count} pages, but got {len(pages)}. Retrying...")
-                
-            return pages
+            normalized_pages, info = self._normalize_ocr_pages(
+                raw_pages=pages,
+                start_page_offset=start_page_offset,
+                expected_count=expected_count,
+            )
+            if normalized_pages is None:
+                raise ValueError(
+                    f"Batch incomplete after normalization: expected={expected_count}, "
+                    f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
+                    f"dropped_duplicate={info['dropped_duplicate']}. Retrying..."
+                )
+
+            if len(pages) != expected_count or info["used_fallback_sequential"]:
+                logger.warning(
+                    "OCR normalization applied for pages %s+: raw=%s expected=%s "
+                    "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s",
+                    start_page_offset,
+                    len(pages),
+                    expected_count,
+                    info["dropped_out_of_range"],
+                    info["dropped_duplicate"],
+                    info["used_fallback_sequential"],
+                )
+
+            return normalized_pages
         except Exception as e:
             logger.error(f"Failed to parse Gemini response or incomplete batch: {e}. Raw: {response.text[:100]}...")
             raise
