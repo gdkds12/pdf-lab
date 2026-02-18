@@ -199,6 +199,8 @@ class IngestPipeline:
                     future_to_batch[future] = batch
 
                 results_map = {}  # start_page -> list of pages
+                total_batches = len(tasks)
+                completed_batches = 0
                 while future_to_batch:
                     done, _ = concurrent.futures.wait(
                         list(future_to_batch.keys()),
@@ -211,7 +213,11 @@ class IngestPipeline:
                         try:
                             data = future.result()
                             results_map[start_p] = data
-                            logger.info(f"Batch {start_p+1}-{batch_info['end_page']} completed. Got {len(data)} pages.")
+                            completed_batches += 1
+                            logger.info(
+                                f"Batch {start_p+1}-{batch_info['end_page']} completed. "
+                                f"Got {len(data)} pages. Progress {completed_batches}/{total_batches}"
+                            )
                         except Exception as exc:
                             logger.error(f"Batch {start_p+1}-{batch_info['end_page']} generated an exception: {exc}")
                             raise exc
@@ -469,34 +475,57 @@ class IngestPipeline:
     def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
         expected_count = end_page - start_page
         pdf_bytes = self._extract_pdf_bytes_for_range(start_page, end_page)
-        return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
+        try:
+            return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
+        except Exception as e:
+            logger.warning(
+                f"Range OCR failed for pages {start_page+1}-{end_page}. "
+                f"Falling back to per-page OCR. Reason: {type(e).__name__}: {e}"
+            )
+            return self._call_gemini_ocr_per_page(start_page, end_page)
+
+    def _call_gemini_ocr_per_page(self, start_page: int, end_page: int) -> List[Dict]:
+        recovered: List[Dict] = []
+        failed_pages: List[str] = []
+
+        for page_idx in range(start_page, end_page):
+            try:
+                single_pdf = self._extract_pdf_bytes_for_range(page_idx, page_idx + 1)
+                page_result = self._call_gemini_ocr(single_pdf, page_idx + 1, 1)
+                if not page_result:
+                    raise ValueError("Empty page OCR result")
+                recovered.extend(page_result[:1])
+            except Exception as e:
+                failed_pages.append(f"{page_idx + 1}:{type(e).__name__}")
+                logger.error(f"Per-page OCR failed for page {page_idx + 1}: {e}")
+
+        if failed_pages:
+            raise RuntimeError(
+                f"Per-page OCR fallback failed for range {start_page+1}-{end_page}. "
+                f"failed_pages={','.join(failed_pages[:5])}"
+            )
+
+        return recovered
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
         logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
-        client = get_gemini_api_client(shard_key=f"p1-sync:{self.source_id}:{start_page_offset}")
+        client = get_gemini_api_client(
+            shard_key=f"p1-sync:{self.source_id}:{start_page_offset}",
+            timeout_sec=Config.PHASE1_OCR_TIMEOUT_SEC,
+        )
         model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
         prompt = self._build_ocr_prompt(start_page_offset, expected_count)
         part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-        
-        # Wrapper to enforce timeout around sync API call.
-        def _generate():
-            return client.models.generate_content(
-                model=model_name,
-                contents=[part, prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    max_output_tokens=64000,
-                    temperature=0.0,
-                ),
-            )
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as request_executor:
-            future = request_executor.submit(_generate)
-            try:
-                response = future.result(timeout=Config.PHASE1_OCR_TIMEOUT_SEC)
-            except concurrent.futures.TimeoutError:
-                raise TimeoutError(f"Gemini API call timed out after {Config.PHASE1_OCR_TIMEOUT_SEC} seconds for batch {start_page_offset}")
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[part, prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                max_output_tokens=64000,
+                temperature=0.0,
+            ),
+        )
         
         try:
             text = response.text or extract_generate_content_text(response)
@@ -599,7 +628,10 @@ class IngestPipeline:
                 response = client.models.embed_content(
                     model=Config.EMBEDDING_MODEL_NAME,
                     contents=texts,
-                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_DOCUMENT",
+                        output_dimensionality=Config.EMBEDDING_DIMENSIONS,
+                    ),
                 )
                 embeddings = list(getattr(response, "embeddings", None) or [])
                 if len(embeddings) != len(batch):

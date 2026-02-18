@@ -3,7 +3,7 @@ import logging
 import time
 import itertools
 import threading
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
@@ -67,16 +67,26 @@ def _pick_api_key(keys: List[str], shard_key: Optional[str]) -> str:
     return keys[idx]
 
 
-def get_gemini_api_client(shard_key: Optional[str] = None) -> genai.Client:
+def get_gemini_api_client(
+    shard_key: Optional[str] = None,
+    timeout_sec: Optional[int] = None,
+) -> genai.Client:
     keys = require_gemini_api_keys()
     selected = _pick_api_key(keys, shard_key)
+    timeout_value = int(timeout_sec) if timeout_sec and int(timeout_sec) > 0 else None
+    cache_key: Tuple[str, Optional[int]] = (selected, timeout_value)
 
     with _client_cache_lock:
-        cached = _client_cache.get(selected)
+        cached = _client_cache.get(cache_key)
         if cached is not None:
             return cached
-        client = genai.Client(api_key=selected)
-        _client_cache[selected] = client
+        client_kwargs = {"api_key": selected}
+        if timeout_value is not None:
+            # Route timeout through underlying HTTP client args (seconds).
+            # Direct HttpOptions.timeout can behave too aggressively for large multipart uploads.
+            client_kwargs["http_options"] = types.HttpOptions(clientArgs={"timeout": timeout_value})
+        client = genai.Client(**client_kwargs)
+        _client_cache[cache_key] = client
         return client
 
 
