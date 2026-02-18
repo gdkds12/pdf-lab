@@ -345,7 +345,7 @@ class IngestPipeline:
                 raise RuntimeError(f"Empty OCR response for pages {start_page+1}-{end_page}")
 
             data = json_repair.loads(text)
-            pages = data.get("pages", [])
+            pages = self._extract_ocr_pages_payload(data)
             normalized_pages, info = self._normalize_ocr_pages(
                 raw_pages=pages,
                 start_page_offset=start_page + 1,
@@ -399,6 +399,19 @@ class IngestPipeline:
         6. Do not miss any page. Return exactly {expected_count} pages.
         """
 
+    def _extract_ocr_pages_payload(self, payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, dict):
+            pages = payload.get("pages")
+            if isinstance(pages, list):
+                return pages
+            data_pages = payload.get("data")
+            if isinstance(data_pages, list):
+                return data_pages
+            return []
+        if isinstance(payload, list):
+            return payload
+        return []
+
     def _normalize_ocr_pages(
         self,
         raw_pages: List[Dict[str, Any]],
@@ -412,11 +425,14 @@ class IngestPipeline:
         """
         expected_nums = list(range(start_page_offset, start_page_offset + expected_count))
         expected_set = set(expected_nums)
-        info = {
+        info: Dict[str, Any] = {
             "input_count": len(raw_pages),
             "dropped_out_of_range": 0,
             "dropped_duplicate": 0,
             "used_fallback_sequential": False,
+            "in_range_count": 0,
+            "missing_page_nums": [],
+            "in_range_pages": [],
         }
 
         by_page_num: Dict[int, Dict[str, Any]] = {}
@@ -451,6 +467,12 @@ class IngestPipeline:
                 continue
             by_page_num[page_num] = {"page_num": page_num, "markdown": markdown}
 
+        in_range_pages = [by_page_num[num] for num in expected_nums if num in by_page_num]
+        missing_page_nums = [num for num in expected_nums if num not in by_page_num]
+        info["in_range_count"] = len(in_range_pages)
+        info["missing_page_nums"] = missing_page_nums
+        info["in_range_pages"] = in_range_pages
+
         # Preferred: exact expected range by page number.
         if all(num in by_page_num for num in expected_nums):
             normalized = [by_page_num[num] for num in expected_nums]
@@ -478,30 +500,69 @@ class IngestPipeline:
         try:
             return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
         except Exception as e:
+            if (
+                Config.PHASE1_ADAPTIVE_SPLIT_ON_FAILURE
+                and expected_count > max(1, Config.PHASE1_ADAPTIVE_MIN_BATCH_PAGES)
+            ):
+                split_size = max(Config.PHASE1_ADAPTIVE_MIN_BATCH_PAGES, expected_count // 2)
+                if split_size < expected_count:
+                    logger.warning(
+                        "Range OCR failed for pages %s-%s. Splitting into subranges of %s pages. Reason: %s: %s",
+                        start_page + 1,
+                        end_page,
+                        split_size,
+                        type(e).__name__,
+                        e,
+                    )
+                    merged: List[Dict] = []
+                    cursor = start_page
+                    while cursor < end_page:
+                        next_end = min(cursor + split_size, end_page)
+                        merged.extend(self._call_gemini_ocr_for_range(cursor, next_end))
+                        cursor = next_end
+                    return merged
+
             logger.warning(
                 f"Range OCR failed for pages {start_page+1}-{end_page}. "
                 f"Falling back to per-page OCR. Reason: {type(e).__name__}: {e}"
             )
-            return self._call_gemini_ocr_per_page(start_page, end_page)
+            return self._call_gemini_ocr_per_page(start_page=start_page, end_page=end_page)
 
-    def _call_gemini_ocr_per_page(self, start_page: int, end_page: int) -> List[Dict]:
+    def _call_gemini_ocr_per_page(
+        self,
+        start_page: Optional[int] = None,
+        end_page: Optional[int] = None,
+        page_nums: Optional[List[int]] = None,
+    ) -> List[Dict]:
         recovered: List[Dict] = []
         failed_pages: List[str] = []
 
-        for page_idx in range(start_page, end_page):
+        if page_nums is not None:
+            targets = sorted(set(int(p) for p in page_nums))
+        else:
+            if start_page is None or end_page is None:
+                raise ValueError("start_page/end_page or page_nums is required for per-page OCR.")
+            targets = list(range(start_page + 1, end_page + 1))
+
+        for page_num in targets:
             try:
+                page_idx = page_num - 1
                 single_pdf = self._extract_pdf_bytes_for_range(page_idx, page_idx + 1)
-                page_result = self._call_gemini_ocr(single_pdf, page_idx + 1, 1)
+                page_result = self._call_gemini_ocr(single_pdf, page_num, 1)
                 if not page_result:
                     raise ValueError("Empty page OCR result")
                 recovered.extend(page_result[:1])
             except Exception as e:
-                failed_pages.append(f"{page_idx + 1}:{type(e).__name__}")
-                logger.error(f"Per-page OCR failed for page {page_idx + 1}: {e}")
+                failed_pages.append(f"{page_num}:{type(e).__name__}")
+                logger.error(f"Per-page OCR failed for page {page_num}: {e}")
 
         if failed_pages:
+            if targets:
+                target_range = f"{targets[0]}-{targets[-1]}"
+            else:
+                target_range = "empty"
             raise RuntimeError(
-                f"Per-page OCR fallback failed for range {start_page+1}-{end_page}. "
+                f"Per-page OCR fallback failed for range {target_range}. "
                 f"failed_pages={','.join(failed_pages[:5])}"
             )
 
@@ -526,20 +587,44 @@ class IngestPipeline:
                 temperature=0.0,
             ),
         )
-        
+        text = ""
         try:
             text = response.text or extract_generate_content_text(response)
             logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
             
             # Use json_repair to handle potential truncated JSON or formatting issues
             data = json_repair.loads(text)
-            pages = data.get("pages", [])
+            pages = self._extract_ocr_pages_payload(data)
             normalized_pages, info = self._normalize_ocr_pages(
                 raw_pages=pages,
                 start_page_offset=start_page_offset,
                 expected_count=expected_count,
             )
             if normalized_pages is None:
+                in_range_pages = list(info.get("in_range_pages") or [])
+                missing_page_nums = list(info.get("missing_page_nums") or [])
+                min_required = max(1, min(Config.PHASE1_PARTIAL_FILL_MIN_PAGES, expected_count - 1))
+                can_partial_fill = (
+                    Config.PHASE1_PARTIAL_FILL_ENABLED
+                    and len(in_range_pages) >= min_required
+                    and len(missing_page_nums) > 0
+                )
+                if can_partial_fill:
+                    logger.warning(
+                        "Partial OCR accepted for pages %s+: in_range=%s missing=%s. Filling missing pages per-page.",
+                        start_page_offset,
+                        len(in_range_pages),
+                        len(missing_page_nums),
+                    )
+                    filled_pages = self._call_gemini_ocr_per_page(page_nums=missing_page_nums)
+                    by_page_num = {int(p["page_num"]): p for p in in_range_pages if isinstance(p, dict)}
+                    for p in filled_pages:
+                        if isinstance(p, dict) and "page_num" in p:
+                            by_page_num[int(p["page_num"])] = p
+                    expected_nums = list(range(start_page_offset, start_page_offset + expected_count))
+                    if all(num in by_page_num for num in expected_nums):
+                        return [by_page_num[num] for num in expected_nums]
+
                 raise ValueError(
                     f"Batch incomplete after normalization: expected={expected_count}, "
                     f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
@@ -560,7 +645,7 @@ class IngestPipeline:
 
             return normalized_pages
         except Exception as e:
-            logger.error(f"Failed to parse Gemini response or incomplete batch: {e}. Raw: {response.text[:100]}...")
+            logger.error(f"Failed to parse Gemini response or incomplete batch: {e}. Raw: {text[:100]}...")
             raise
 
     def _chunk_text(self, pages_data: List[Dict]) -> List[Dict]:
