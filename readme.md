@@ -25,7 +25,8 @@
 - Gemini API 전환
   - Phase 1 OCR: Vertex SDK 호출 대신 Gemini API 호출
   - Phase 2 STT/신호추출: Vertex SDK 호출 대신 Gemini API 호출
-  - Gemini Batch API 기반 그룹 처리 + in-flight 동시 처리
+  - 운영 기본 모드: 일반 `generateContent` 호출 (non-batch)
+  - Batch API 경로는 비활성 기본값으로 유지(필요 시 플래그로만 활성화)
   - 글로벌 endpoint 사용 (`GEMINI_LOCATION=global`)
   - 다중 프로젝트 API 키 샤딩 지원 (`GEMINI_API_KEY`, `GEMINI_API_KEY_SECONDARY`)
 - Cloud Run Job 운영값 조정
