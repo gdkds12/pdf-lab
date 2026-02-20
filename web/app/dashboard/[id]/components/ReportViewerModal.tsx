@@ -43,6 +43,8 @@ type QueueItem = {
 type ReportData = {
   warnings?: string[]
   recommendation_queue?: QueueItem[]
+  recommendation_queue_confirmed?: QueueItem[]
+  recommendation_queue_candidates?: QueueItem[]
 }
 
 function formatSecRange(t0: number, t1: number) {
@@ -68,6 +70,14 @@ function formatReference(ref: ReferenceRef) {
   }
 
   return '교재 참조'
+}
+
+function parseProofNote(note?: string | null) {
+  if (!note) return { noteText: null as string | null, fileName: null as string | null }
+  const m = note.match(/파일\s*:\s*([^|]+)/)
+  const fileName = m?.[1]?.trim() || null
+  const noteText = note.replace(/\|?\s*파일\s*:\s*[^|]+/, '').trim() || null
+  return { noteText, fileName }
 }
 
 export default function ReportViewerModal({ isOpen, onClose, sessionId, title }: ReportViewerModalProps) {
@@ -110,7 +120,10 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
   }, [isOpen, sessionId])
 
   const warnings = report?.warnings ?? []
+  const confirmedQueue = report?.recommendation_queue_confirmed ?? []
+  const candidateQueue = report?.recommendation_queue_candidates ?? []
   const queue = report?.recommendation_queue ?? []
+  const hasSplitQueues = confirmedQueue.length > 0 || candidateQueue.length > 0
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -152,18 +165,25 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                   <h3 className="text-lg font-bold text-foreground">추천 문제 큐</h3>
                 </div>
 
-                {queue.length === 0 ? (
+                {(hasSplitQueues ? (confirmedQueue.length + candidateQueue.length) : queue.length) === 0 ? (
                   <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-foreground/70">
                     생성된 추천 항목이 없습니다. 오디오 파일을 더 추가한 뒤 다시 리포트를 생성해 주세요.
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {queue.map((item, idx) => (
-                      <article key={`${item.title}-${idx}`} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <div className="space-y-5">
+                    {hasSplitQueues && (
+                      <div className="grid gap-2 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-foreground/75 md:grid-cols-2">
+                        <p>확정 추천: <span className="font-semibold text-foreground">{confirmedQueue.length}개</span></p>
+                        <p>후보 추천: <span className="font-semibold text-foreground">{candidateQueue.length}개</span></p>
+                      </div>
+                    )}
+
+                    {((hasSplitQueues ? confirmedQueue : queue) ?? []).map((item, idx) => (
+                      <article key={`confirmed-${item.title}-${idx}`} className="rounded-xl border border-emerald-300/25 bg-emerald-500/5 p-4">
                         <div className="mb-2 flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-xs font-semibold text-primary">
-                              큐 {item.rank ?? idx + 1} · 중요도 {item.importance_score}점
+                            <p className="text-xs font-semibold text-emerald-300">
+                              확정 {item.rank ?? idx + 1} · 중요도 {item.importance_score}점
                             </p>
                             <h4 className="mt-1 text-base font-semibold text-foreground">{item.title}</h4>
                           </div>
@@ -183,23 +203,30 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                               <Headphones className="h-3.5 w-3.5" /> 근거 음성 구간
                             </p>
                             <div className="space-y-2">
-                              {item.proof_refs?.map((proof, proofIdx) => (
-                                <div key={`${proof.signal_id}-${proofIdx}`} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs">
-                                  <p className="font-mono text-foreground/80">{formatSecRange(proof.t0_sec, proof.t1_sec)}</p>
-                                  {proof.note ? <p className="mt-1 text-foreground/70">{proof.note}</p> : null}
-                                </div>
-                              ))}
+                              {item.proof_refs?.map((proof, proofIdx) => {
+                                const { noteText, fileName } = parseProofNote(proof.note)
+                                return (
+                                  <div key={`${proof.signal_id}-${proofIdx}`} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs">
+                                    <p className="font-mono text-foreground/80">{formatSecRange(proof.t0_sec, proof.t1_sec)}</p>
+                                    {fileName ? <p className="mt-1 text-foreground/80">원본 파일: {fileName}</p> : null}
+                                    {noteText ? <p className="mt-1 text-foreground/70">{noteText}</p> : null}
+                                  </div>
+                                )
+                              })}
                             </div>
                           </div>
 
                           <div className="rounded-lg border border-white/10 bg-black/25 p-3">
                             <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-foreground/70">
-                              <BookOpen className="h-3.5 w-3.5" /> 교재 좌표
+                              <BookOpen className="h-3.5 w-3.5" /> 교재 좌표/문제
                             </p>
                             <div className="space-y-2">
                               {item.references?.map((ref, refIdx) => (
                                 <div key={`${ref.chunk_id}-${refIdx}`} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs">
                                   <p className="font-mono text-foreground/80">{formatReference(ref)}</p>
+                                  {Array.isArray(ref.anchor_path) && ref.anchor_path.length > 0 ? (
+                                    <p className="mt-1 text-foreground/70">목차: {ref.anchor_path.join(' > ')}</p>
+                                  ) : null}
                                   {ref.reason ? <p className="mt-1 text-foreground/70">{ref.reason}</p> : null}
                                 </div>
                               ))}
@@ -208,6 +235,19 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                         </div>
                       </article>
                     ))}
+
+                    {hasSplitQueues && candidateQueue.length > 0 && (
+                      <section className="space-y-3">
+                        <h4 className="text-sm font-semibold text-foreground/80">후보 추천</h4>
+                        {candidateQueue.map((item, idx) => (
+                          <article key={`candidate-${item.title}-${idx}`} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                            <p className="text-xs font-semibold text-primary">후보 {item.rank ?? idx + 1} · 중요도 {item.importance_score}점</p>
+                            <h5 className="mt-1 text-sm font-semibold text-foreground">{item.title}</h5>
+                            <p className="mt-1 text-xs text-foreground/75">{item.why}</p>
+                          </article>
+                        ))}
+                      </section>
+                    )}
                   </div>
                 )}
               </section>

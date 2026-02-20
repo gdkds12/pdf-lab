@@ -55,6 +55,8 @@ type LatestReportSummary = {
   sessionId: string
   createdAt: string
   queueCount: number
+  confirmedCount: number
+  candidateCount: number
   evidenceCount: number
   warningCount: number
 }
@@ -122,9 +124,19 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
       }
 
       const payload = latest.report_json as Record<string, unknown> | null
-      const queueItems = Array.isArray(payload?.recommendation_queue)
+      const confirmedItems = Array.isArray(payload?.recommendation_queue_confirmed)
+        ? (payload?.recommendation_queue_confirmed as Array<Record<string, unknown>>)
+        : []
+      const candidateItems = Array.isArray(payload?.recommendation_queue_candidates)
+        ? (payload?.recommendation_queue_candidates as Array<Record<string, unknown>>)
+        : []
+      const legacyItems = Array.isArray(payload?.recommendation_queue)
         ? (payload?.recommendation_queue as Array<Record<string, unknown>>)
         : []
+      const queueItems = confirmedItems.length > 0 || candidateItems.length > 0
+        ? [...confirmedItems, ...candidateItems]
+        : legacyItems
+
       const queueCount = queueItems.length
       const evidenceCount = queueItems.reduce((acc, item) => {
         return acc + countList(item?.proof_refs) + countList(item?.references)
@@ -135,6 +147,8 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         sessionId: latest.session_id,
         createdAt: latest.created_at,
         queueCount,
+        confirmedCount: confirmedItems.length,
+        candidateCount: candidateItems.length,
         evidenceCount,
         warningCount,
       })
@@ -685,7 +699,7 @@ export default function SourcePanel({ subjectId }: { subjectId: string }) {
         <div className="border-b border-white/10 bg-primary/10 px-4 py-2 text-[11px] text-primary-foreground">
           <div className="flex items-center justify-between gap-2">
             <p>
-              최신 통합 리포트: {formatTimestamp(latestReport.createdAt)} · 추천 {latestReport.queueCount}개 · 근거 {latestReport.evidenceCount}개 · 경고 {latestReport.warningCount}개
+              최신 통합 리포트: {formatTimestamp(latestReport.createdAt)} · 확정 {latestReport.confirmedCount}개 · 후보 {latestReport.candidateCount}개 · 총 {latestReport.queueCount}개 · 근거 {latestReport.evidenceCount}개 · 경고 {latestReport.warningCount}개
             </p>
             <button
               onClick={() => setViewingReportSessionId(latestReport.sessionId)}
