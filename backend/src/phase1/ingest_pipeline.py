@@ -1,9 +1,12 @@
 import logging
 import os
+import re
 import sys
+import time
+import tempfile
+import threading
 import fitz  # PyMuPDF
 from google.genai import types
-from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import concurrent.futures
@@ -30,6 +33,7 @@ class IngestPipeline:
         self.local_pdf_path = f"/tmp/{uuid.uuid4()}.pdf"
         self.storage_client = StorageClient()
         self.supabase = get_supabase_client()
+        self.slice_semaphore = threading.BoundedSemaphore(max(1, Config.PHASE1_SLICE_MAX_INFLIGHT))
         
     def run(self):
         try:
@@ -73,7 +77,9 @@ class IngestPipeline:
             
             # Step 6: DB Insert
             self._save_chunks(chunks_with_embeddings)
-            
+            # Step 6.5: Learning-object index (toc/problem/strategy/summary)
+            self._save_learning_objects(chunks_with_embeddings)
+
             # Mark Succeeded
             # Explicitly log the data being sent
             logger.info(f"Updating source {self.source_id} to succeeded status. Page count: {len(pages_data)}")
@@ -178,12 +184,40 @@ class IngestPipeline:
 
             # Execute in bounded parallelism.
             all_pages_data = []
-            max_workers = max(1, min(len(tasks), Config.PHASE1_SCANNED_MAX_WORKERS))
+            max_workers = max(
+                1,
+                min(
+                    len(tasks),
+                    Config.PHASE1_SCANNED_MAX_WORKERS,
+                    Config.PHASE1_API_MAX_CONCURRENCY,
+                    Config.PHASE1_EFFECTIVE_MAX_WORKERS,
+                ),
+            )
             logger.info(f"Starting parallel OCR with {max_workers} workers for {len(tasks)} batches.")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_batch = {}
+                future_to_meta = {}
                 task_iter = iter(tasks)
+                task_state: Dict[int, Dict[str, Any]] = {}
+
+                def submit_batch(batch: Dict[str, int], is_hedge: bool = False) -> None:
+                    start_p = batch["start_page"]
+                    state = task_state.setdefault(start_p, {"hedges": 0})
+                    shard_suffix = None
+                    if is_hedge:
+                        state["hedges"] += 1
+                        shard_suffix = f"hedge-{state['hedges']}"
+                    future = executor.submit(
+                        self._call_gemini_ocr_for_range,
+                        batch["start_page"],
+                        batch["end_page"],
+                        shard_suffix,
+                    )
+                    future_to_meta[future] = {
+                        "batch": batch,
+                        "submitted_at": time.monotonic(),
+                        "is_hedge": is_hedge,
+                    }
 
                 # Prime worker pool.
                 for _ in range(max_workers):
@@ -191,25 +225,60 @@ class IngestPipeline:
                         batch = next(task_iter)
                     except StopIteration:
                         break
-                    future = executor.submit(
-                        self._call_gemini_ocr_for_range,
-                        batch["start_page"],
-                        batch["end_page"]
-                    )
-                    future_to_batch[future] = batch
+                    submit_batch(batch)
 
                 results_map = {}  # start_page -> list of pages
                 total_batches = len(tasks)
                 completed_batches = 0
-                while future_to_batch:
+                while future_to_meta:
                     done, _ = concurrent.futures.wait(
-                        list(future_to_batch.keys()),
+                        list(future_to_meta.keys()),
+                        timeout=1.0,
                         return_when=concurrent.futures.FIRST_COMPLETED
                     )
 
+                    if not done:
+                        # Hedge only tail stragglers to cut p99 latency.
+                        remaining = total_batches - completed_batches
+                        if (
+                            Config.PHASE1_STRAGGLER_HEDGE_ENABLED
+                            and remaining <= max(1, Config.PHASE1_STRAGGLER_HEDGE_REMAINING_THRESHOLD)
+                        ):
+                            now = time.monotonic()
+                            for future, meta in list(future_to_meta.items()):
+                                if meta.get("is_hedge"):
+                                    continue
+                                batch_info = meta["batch"]
+                                start_p = batch_info["start_page"]
+                                if start_p in results_map:
+                                    continue
+                                age_sec = now - float(meta.get("submitted_at") or now)
+                                state = task_state.get(start_p) or {}
+                                hedges = int(state.get("hedges") or 0)
+                                if (
+                                    age_sec >= max(1.0, float(Config.PHASE1_STRAGGLER_HEDGE_SEC))
+                                    and hedges < max(1, Config.PHASE1_STRAGGLER_MAX_HEDGES_PER_PAGE)
+                                ):
+                                    logger.warning(
+                                        "Launching hedge OCR for pages %s-%s after %.1fs (hedges=%s/%s)",
+                                        start_p + 1,
+                                        batch_info["end_page"],
+                                        age_sec,
+                                        hedges + 1,
+                                        Config.PHASE1_STRAGGLER_MAX_HEDGES_PER_PAGE,
+                                    )
+                                    submit_batch(batch_info, is_hedge=True)
+                        continue
+
                     for future in done:
-                        batch_info = future_to_batch.pop(future)
+                        meta = future_to_meta.pop(future, None)
+                        if not meta:
+                            continue
+                        batch_info = meta["batch"]
                         start_p = batch_info["start_page"]
+                        if start_p in results_map:
+                            # Duplicate (hedged) completion after winner already stored.
+                            continue
                         try:
                             data = future.result()
                             results_map[start_p] = data
@@ -218,6 +287,13 @@ class IngestPipeline:
                                 f"Batch {start_p+1}-{batch_info['end_page']} completed. "
                                 f"Got {len(data)} pages. Progress {completed_batches}/{total_batches}"
                             )
+                            # Best-effort cancel outstanding duplicates for this page.
+                            for other_future, other_meta in list(future_to_meta.items()):
+                                other_batch = other_meta["batch"]
+                                if other_batch["start_page"] != start_p:
+                                    continue
+                                if other_future.cancel():
+                                    future_to_meta.pop(other_future, None)
                         except Exception as exc:
                             logger.error(f"Batch {start_p+1}-{batch_info['end_page']} generated an exception: {exc}")
                             raise exc
@@ -226,12 +302,7 @@ class IngestPipeline:
                             next_batch = next(task_iter)
                         except StopIteration:
                             continue
-                        next_future = executor.submit(
-                            self._call_gemini_ocr_for_range,
-                            next_batch["start_page"],
-                            next_batch["end_page"]
-                        )
-                        future_to_batch[next_future] = next_batch
+                        submit_batch(next_batch)
 
             # Reassemble in order
             sorted_start_pages = sorted(results_map.keys())
@@ -252,7 +323,15 @@ class IngestPipeline:
         results_map: Dict[int, List[Dict]] = {}
         group_size = max(1, Config.PHASE1_BATCH_REQUESTS_PER_JOB)
         groups = list(chunked(tasks, group_size))
-        max_inflight = max(1, min(len(groups), Config.PHASE1_BATCH_MAX_INFLIGHT_JOBS))
+        max_inflight = max(
+            1,
+            min(
+                len(groups),
+                Config.PHASE1_BATCH_MAX_INFLIGHT_JOBS,
+                Config.PHASE1_API_MAX_CONCURRENCY,
+                Config.PHASE1_EFFECTIVE_MAX_WORKERS,
+            ),
+        )
 
         logger.info(
             f"OCR batch mode: groups={len(groups)}, group_size={group_size}, max_inflight={max_inflight}"
@@ -281,7 +360,15 @@ class IngestPipeline:
             start_page = task["start_page"]
             end_page = task["end_page"]
             expected_count = end_page - start_page
-            pdf_bytes = self._extract_pdf_bytes_for_range(start_page, end_page)
+            with self.slice_semaphore:
+                tmp_pdf = self._extract_pdf_temp_path_for_range(start_page, end_page)
+                try:
+                    pdf_bytes = self._read_file_bytes(tmp_pdf)
+                finally:
+                    try:
+                        os.remove(tmp_pdf)
+                    except OSError:
+                        pass
             prompt = self._build_ocr_prompt(start_page + 1, expected_count)
             requests.append(
                 types.InlinedRequest(
@@ -291,6 +378,10 @@ class IngestPipeline:
                     ],
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
+                        response_schema=self._phase1_ocr_response_schema(
+                            start_page_offset=start_page + 1,
+                            expected_count=expected_count,
+                        ),
                         max_output_tokens=64000,
                         temperature=0.0,
                     ),
@@ -352,16 +443,45 @@ class IngestPipeline:
                 expected_count=expected_count,
             )
             if normalized_pages is None:
-                raise ValueError(
-                    f"OCR batch incomplete pages {start_page+1}-{end_page}: expected={expected_count}, "
-                    f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
-                    f"dropped_duplicate={info['dropped_duplicate']}"
-                )
+                in_range_pages = list(info.get("in_range_pages") or [])
+                missing_page_nums = list(info.get("missing_page_nums") or [])
+                if Config.PHASE1_PARTIAL_FILL_ENABLED and missing_page_nums:
+                    logger.warning(
+                        "OCR batch partial fill for pages %s-%s: in_range=%s missing=%s",
+                        start_page + 1,
+                        end_page,
+                        len(in_range_pages),
+                        len(missing_page_nums),
+                    )
+                    filled_pages = self._call_gemini_ocr_per_page(page_nums=missing_page_nums)
+                    merged = in_range_pages + filled_pages
+                    normalized_pages = self._build_expected_pages(
+                        start_page_offset=start_page + 1,
+                        expected_count=expected_count,
+                        pages=merged,
+                        allow_empty_fill=True,
+                    )
+                else:
+                    normalized_pages = self._build_expected_pages(
+                        start_page_offset=start_page + 1,
+                        expected_count=expected_count,
+                        pages=in_range_pages,
+                        allow_empty_fill=True,
+                    )
+                    logger.warning(
+                        "OCR batch incomplete pages %s-%s; proceeding with empty-fill. expected=%s raw=%s dropped_out_of_range=%s dropped_duplicate=%s",
+                        start_page + 1,
+                        end_page,
+                        expected_count,
+                        len(pages),
+                        info["dropped_out_of_range"],
+                        info["dropped_duplicate"],
+                    )
 
-            if len(pages) != expected_count or info["used_fallback_sequential"]:
+            if len(pages) != expected_count or info["used_fallback_sequential"] or info["used_relative_page_num_remap"]:
                 logger.warning(
                     "OCR batch normalization applied for pages %s-%s: raw=%s expected=%s "
-                    "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s",
+                    "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s relative_page_num_remap=%s",
                     start_page + 1,
                     end_page,
                     len(pages),
@@ -369,21 +489,42 @@ class IngestPipeline:
                     info["dropped_out_of_range"],
                     info["dropped_duplicate"],
                     info["used_fallback_sequential"],
+                    info["used_relative_page_num_remap"],
                 )
 
             group_results[start_page] = normalized_pages
 
         return group_results
 
-    def _extract_pdf_bytes_for_range(self, start_page: int, end_page: int) -> bytes:
-        with fitz.open(self.local_pdf_path) as doc:
-            new_doc = fitz.open()
-            new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
-            pdf_bytes = new_doc.tobytes()
-            new_doc.close()
-        return pdf_bytes
+    def _extract_pdf_temp_path_for_range(self, start_page: int, end_page: int) -> str:
+        """
+        Materialize a page range to a temporary PDF file.
+        File-backed slicing avoids holding many in-memory buffers simultaneously
+        when many OCR workers run at once.
+        """
+        fd, tmp_path = tempfile.mkstemp(prefix="p1-slice-", suffix=".pdf", dir="/tmp")
+        os.close(fd)
+        try:
+            with fitz.open(self.local_pdf_path) as doc:
+                new_doc = fitz.open()
+                new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
+                new_doc.save(tmp_path)
+                new_doc.close()
+            return tmp_path
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    def _read_file_bytes(self, file_path: str) -> bytes:
+        with open(file_path, "rb") as f:
+            return f.read()
 
     def _build_ocr_prompt(self, start_page_offset: int, expected_count: int) -> str:
+        end_page = start_page_offset + expected_count - 1
         return f"""
         You are a highly accurate OCR engine.
         Extract text from the attached PDF pages.
@@ -391,13 +532,41 @@ class IngestPipeline:
 
         Requirements:
         1. Output format must be: {{ "pages": [ {{ "page_num": <integer>, "markdown": "<content>" }}, ... ] }}
-        2. "page_num" must be adjusted relative to the start page: {start_page_offset}.
-           The first page in this PDF is page {start_page_offset}.
-        3. Do NOT summarize. Transcribe exactly.
-        4. Preserve tables as Markdown tables.
-        5. Preserve equations as LaTeX.
-        6. Do not miss any page. Return exactly {expected_count} pages.
+        2. Return exactly {expected_count} items in "pages". Never omit any page.
+        3. "page_num" must be absolute and strictly in range [{start_page_offset}, {end_page}] with no duplicates.
+        4. If a page is unreadable, still return that page with empty markdown "".
+        5. The first page in this PDF is page {start_page_offset}.
+        6. Do NOT summarize. Transcribe exactly.
+        7. Preserve tables as Markdown tables.
+        8. Preserve equations as LaTeX.
+        9. Do not output any text outside JSON.
         """
+
+    def _phase1_ocr_response_schema(self, start_page_offset: int, expected_count: int) -> Dict[str, Any]:
+        end_page = start_page_offset + expected_count - 1
+        return {
+            "type": "object",
+            "required": ["pages"],
+            "properties": {
+                "pages": {
+                    "type": "array",
+                    "minItems": expected_count,
+                    "maxItems": expected_count,
+                    "items": {
+                        "type": "object",
+                        "required": ["page_num", "markdown"],
+                        "properties": {
+                            "page_num": {
+                                "type": "integer",
+                                "minimum": start_page_offset,
+                                "maximum": end_page,
+                            },
+                            "markdown": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        }
 
     def _extract_ocr_pages_payload(self, payload: Any) -> List[Dict[str, Any]]:
         if isinstance(payload, dict):
@@ -430,6 +599,7 @@ class IngestPipeline:
             "dropped_out_of_range": 0,
             "dropped_duplicate": 0,
             "used_fallback_sequential": False,
+            "used_relative_page_num_remap": False,
             "in_range_count": 0,
             "missing_page_nums": [],
             "in_range_pages": [],
@@ -437,6 +607,7 @@ class IngestPipeline:
 
         by_page_num: Dict[int, Dict[str, Any]] = {}
         parsed_in_order: List[Dict[str, Any]] = []
+        relative_numbered_pages: List[Dict[str, Any]] = []
 
         for idx, page in enumerate(raw_pages):
             if not isinstance(page, dict):
@@ -456,6 +627,13 @@ class IngestPipeline:
 
             parsed = {"index": idx, "page_num": page_num, "markdown": markdown}
             parsed_in_order.append(parsed)
+
+            if page_num is not None and 1 <= page_num <= expected_count:
+                # Some OCR responses ignore absolute numbering and return relative 1..N.
+                relative_numbered_pages.append({
+                    "page_num": start_page_offset + (page_num - 1),
+                    "markdown": markdown,
+                })
 
             if page_num is None:
                 continue
@@ -478,6 +656,19 @@ class IngestPipeline:
             normalized = [by_page_num[num] for num in expected_nums]
             return normalized, info
 
+        # Heuristic: OCR sometimes returns relative page numbers (1..N) for each sub-PDF.
+        # Remap those to absolute range and accept when complete.
+        if relative_numbered_pages:
+            rel_map: Dict[int, Dict[str, Any]] = {}
+            for row in relative_numbered_pages:
+                rel_num = int(row["page_num"])
+                if rel_num not in rel_map:
+                    rel_map[rel_num] = row
+            if all(num in rel_map for num in expected_nums):
+                info["used_relative_page_num_remap"] = True
+                normalized = [rel_map[num] for num in expected_nums]
+                return normalized, info
+
         # Fallback: use first N parsed entries and remap sequential page numbers.
         if len(parsed_in_order) >= expected_count:
             normalized: List[Dict[str, Any]] = []
@@ -494,11 +685,61 @@ class IngestPipeline:
         # Insufficient pages after normalization -> retry path.
         return None, info
 
-    def _call_gemini_ocr_for_range(self, start_page: int, end_page: int) -> List[Dict]:
+    def _build_expected_pages(
+        self,
+        start_page_offset: int,
+        expected_count: int,
+        pages: List[Dict[str, Any]],
+        allow_empty_fill: bool,
+    ) -> List[Dict[str, Any]]:
+        expected_nums = list(range(start_page_offset, start_page_offset + expected_count))
+        by_page_num: Dict[int, Dict[str, Any]] = {}
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            try:
+                page_num = int(page.get("page_num"))
+            except (TypeError, ValueError):
+                continue
+            markdown = page.get("markdown")
+            if markdown is None:
+                markdown = ""
+            if not isinstance(markdown, str):
+                markdown = str(markdown)
+            if page_num not in by_page_num:
+                by_page_num[page_num] = {"page_num": page_num, "markdown": markdown}
+
+        normalized: List[Dict[str, Any]] = []
+        for num in expected_nums:
+            if num in by_page_num:
+                normalized.append(by_page_num[num])
+            elif allow_empty_fill:
+                normalized.append({"page_num": num, "markdown": ""})
+        return normalized
+
+    def _call_gemini_ocr_for_range(
+        self,
+        start_page: int,
+        end_page: int,
+        shard_suffix: Optional[str] = None,
+    ) -> List[Dict]:
         expected_count = end_page - start_page
-        pdf_bytes = self._extract_pdf_bytes_for_range(start_page, end_page)
+        with self.slice_semaphore:
+            tmp_pdf = self._extract_pdf_temp_path_for_range(start_page, end_page)
+            try:
+                pdf_bytes = self._read_file_bytes(tmp_pdf)
+            finally:
+                try:
+                    os.remove(tmp_pdf)
+                except OSError:
+                    pass
         try:
-            return self._call_gemini_ocr(pdf_bytes, start_page + 1, expected_count)
+            return self._call_gemini_ocr(
+                pdf_bytes,
+                start_page + 1,
+                expected_count,
+                shard_suffix=shard_suffix,
+            )
         except Exception as e:
             if (
                 Config.PHASE1_ADAPTIVE_SPLIT_ON_FAILURE
@@ -518,7 +759,13 @@ class IngestPipeline:
                     cursor = start_page
                     while cursor < end_page:
                         next_end = min(cursor + split_size, end_page)
-                        merged.extend(self._call_gemini_ocr_for_range(cursor, next_end))
+                        merged.extend(
+                            self._call_gemini_ocr_for_range(
+                                cursor,
+                                next_end,
+                                shard_suffix=shard_suffix,
+                            )
+                        )
                         cursor = next_end
                     return merged
 
@@ -547,106 +794,212 @@ class IngestPipeline:
         for page_num in targets:
             try:
                 page_idx = page_num - 1
-                single_pdf = self._extract_pdf_bytes_for_range(page_idx, page_idx + 1)
-                page_result = self._call_gemini_ocr(single_pdf, page_num, 1)
+                with self.slice_semaphore:
+                    tmp_pdf = self._extract_pdf_temp_path_for_range(page_idx, page_idx + 1)
+                    try:
+                        single_pdf = self._read_file_bytes(tmp_pdf)
+                    finally:
+                        try:
+                            os.remove(tmp_pdf)
+                        except OSError:
+                            pass
+                page_result = self._call_gemini_ocr(single_pdf, page_num, 1, allow_missing_fill=False)
                 if not page_result:
                     raise ValueError("Empty page OCR result")
-                recovered.extend(page_result[:1])
+                first = page_result[0] if isinstance(page_result[0], dict) else {}
+                markdown = first.get("markdown", "")
+                if markdown is None:
+                    markdown = ""
+                if not isinstance(markdown, str):
+                    markdown = str(markdown)
+                recovered.append({"page_num": page_num, "markdown": markdown})
             except Exception as e:
                 failed_pages.append(f"{page_num}:{type(e).__name__}")
                 logger.error(f"Per-page OCR failed for page {page_num}: {e}")
+                if Config.PHASE1_PER_PAGE_ALLOW_EMPTY_FILL:
+                    recovered.append({"page_num": page_num, "markdown": ""})
+                    logger.warning(f"Per-page OCR empty-fill applied for page {page_num}.")
 
         if failed_pages:
-            if targets:
-                target_range = f"{targets[0]}-{targets[-1]}"
+            if Config.PHASE1_PER_PAGE_ALLOW_EMPTY_FILL:
+                logger.warning(
+                    "Per-page OCR completed with empty-fill. failed_pages=%s",
+                    ",".join(failed_pages[:5]),
+                )
             else:
-                target_range = "empty"
-            raise RuntimeError(
-                f"Per-page OCR fallback failed for range {target_range}. "
-                f"failed_pages={','.join(failed_pages[:5])}"
-            )
+                if targets:
+                    target_range = f"{targets[0]}-{targets[-1]}"
+                else:
+                    target_range = "empty"
+                raise RuntimeError(
+                    f"Per-page OCR fallback failed for range {target_range}. "
+                    f"failed_pages={','.join(failed_pages[:5])}"
+                )
 
+        recovered.sort(key=lambda x: int(x.get("page_num", 0)))
         return recovered
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def _call_gemini_ocr(self, pdf_bytes: bytes, start_page_offset: int, expected_count: int) -> List[Dict]:
-        logger.info(f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages.")
-        client = get_gemini_api_client(
-            shard_key=f"p1-sync:{self.source_id}:{start_page_offset}",
-            timeout_sec=Config.PHASE1_OCR_TIMEOUT_SEC,
+    def _is_retryable_generation_error(self, error: Exception) -> bool:
+        text = str(error).lower()
+        retry_tokens = (
+            "429",
+            "resource exhausted",
+            "rate limit",
+            "quota",
+            "deadline exceeded",
+            "timeout",
+            "service unavailable",
+            "temporarily unavailable",
+            "internal",
+            "503",
+            "502",
+            "500",
+            # OCR response-shape problems that often recover on retry
+            "batch incomplete",
+            "json",
+            "unterminated",
+            "expecting value",
+            "no such key",
         )
-        model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
-        prompt = self._build_ocr_prompt(start_page_offset, expected_count)
-        part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[part, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                max_output_tokens=64000,
-                temperature=0.0,
-            ),
-        )
-        text = ""
-        try:
-            text = response.text or extract_generate_content_text(response)
-            logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
-            
-            # Use json_repair to handle potential truncated JSON or formatting issues
-            data = json_repair.loads(text)
-            pages = self._extract_ocr_pages_payload(data)
-            normalized_pages, info = self._normalize_ocr_pages(
-                raw_pages=pages,
-                start_page_offset=start_page_offset,
-                expected_count=expected_count,
+        return any(token in text for token in retry_tokens)
+
+    def _call_gemini_ocr(
+        self,
+        pdf_bytes: bytes,
+        start_page_offset: int,
+        expected_count: int,
+        allow_missing_fill: bool = True,
+        shard_suffix: Optional[str] = None,
+    ) -> List[Dict]:
+        # Enforce up to 3 retries for OCR calls (1 initial + 3 retries = 4 attempts).
+        # This keeps behavior aligned with operational SLO while avoiding unbounded loops.
+        max_attempts = max(4, max(1, Config.PHASE1_OCR_MAX_ATTEMPTS))
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                f"Thread started for batch starting at page {start_page_offset} requesting {expected_count} pages. "
+                f"(attempt {attempt}/{max_attempts})"
             )
-            if normalized_pages is None:
-                in_range_pages = list(info.get("in_range_pages") or [])
-                missing_page_nums = list(info.get("missing_page_nums") or [])
-                min_required = max(1, min(Config.PHASE1_PARTIAL_FILL_MIN_PAGES, expected_count - 1))
-                can_partial_fill = (
-                    Config.PHASE1_PARTIAL_FILL_ENABLED
-                    and len(in_range_pages) >= min_required
-                    and len(missing_page_nums) > 0
+            shard_key = f"p1-sync:{self.source_id}:{start_page_offset}"
+            if shard_suffix:
+                shard_key = f"{shard_key}:{shard_suffix}"
+            client = get_gemini_api_client(shard_key=shard_key, timeout_sec=Config.PHASE1_OCR_TIMEOUT_SEC)
+            model_name = normalize_model_name(Config.GEMINI_MODEL_NAME)
+            prompt = self._build_ocr_prompt(start_page_offset, expected_count)
+            part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+            text = ""
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[part, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=self._phase1_ocr_response_schema(
+                            start_page_offset=start_page_offset,
+                            expected_count=expected_count,
+                        ),
+                        max_output_tokens=64000,
+                        temperature=0.0,
+                    ),
                 )
-                if can_partial_fill:
+                text = response.text or extract_generate_content_text(response)
+                logger.info(f"Gemini Raw Response (Page {start_page_offset}+):\\n{text[:1000]}...[truncated]")
+                
+                # Use json_repair to handle potential truncated JSON or formatting issues
+                data = json_repair.loads(text)
+                pages = self._extract_ocr_pages_payload(data)
+                normalized_pages, info = self._normalize_ocr_pages(
+                    raw_pages=pages,
+                    start_page_offset=start_page_offset,
+                    expected_count=expected_count,
+                )
+                if normalized_pages is None:
+                    in_range_pages = list(info.get("in_range_pages") or [])
+                    missing_page_nums = list(info.get("missing_page_nums") or [])
+                    if allow_missing_fill and Config.PHASE1_PARTIAL_FILL_ENABLED and missing_page_nums:
+                        logger.warning(
+                            "Partial OCR accepted for pages %s+: in_range=%s missing=%s. Filling missing pages per-page.",
+                            start_page_offset,
+                            len(in_range_pages),
+                            len(missing_page_nums),
+                        )
+                        filled_pages = self._call_gemini_ocr_per_page(page_nums=missing_page_nums)
+                        merged = in_range_pages + filled_pages
+                        normalized_pages = self._build_expected_pages(
+                            start_page_offset=start_page_offset,
+                            expected_count=expected_count,
+                            pages=merged,
+                            allow_empty_fill=True,
+                        )
+                    elif allow_missing_fill:
+                        normalized_pages = self._build_expected_pages(
+                            start_page_offset=start_page_offset,
+                            expected_count=expected_count,
+                            pages=in_range_pages,
+                            allow_empty_fill=True,
+                        )
+                        logger.warning(
+                            "Batch incomplete after normalization for pages %s+. Proceeding with empty-fill: expected=%s raw=%s dropped_out_of_range=%s dropped_duplicate=%s",
+                            start_page_offset,
+                            expected_count,
+                            len(pages),
+                            info["dropped_out_of_range"],
+                            info["dropped_duplicate"],
+                        )
+                    else:
+                        raise ValueError(
+                            f"Batch incomplete after normalization: expected={expected_count}, "
+                            f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
+                            f"dropped_duplicate={info['dropped_duplicate']}"
+                        )
+
+                if len(pages) != expected_count or info["used_fallback_sequential"] or info["used_relative_page_num_remap"]:
                     logger.warning(
-                        "Partial OCR accepted for pages %s+: in_range=%s missing=%s. Filling missing pages per-page.",
+                        "OCR normalization applied for pages %s+: raw=%s expected=%s "
+                        "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s relative_page_num_remap=%s",
                         start_page_offset,
-                        len(in_range_pages),
-                        len(missing_page_nums),
+                        len(pages),
+                        expected_count,
+                        info["dropped_out_of_range"],
+                        info["dropped_duplicate"],
+                        info["used_fallback_sequential"],
+                        info["used_relative_page_num_remap"],
                     )
-                    filled_pages = self._call_gemini_ocr_per_page(page_nums=missing_page_nums)
-                    by_page_num = {int(p["page_num"]): p for p in in_range_pages if isinstance(p, dict)}
-                    for p in filled_pages:
-                        if isinstance(p, dict) and "page_num" in p:
-                            by_page_num[int(p["page_num"])] = p
-                    expected_nums = list(range(start_page_offset, start_page_offset + expected_count))
-                    if all(num in by_page_num for num in expected_nums):
-                        return [by_page_num[num] for num in expected_nums]
 
-                raise ValueError(
-                    f"Batch incomplete after normalization: expected={expected_count}, "
-                    f"raw={len(pages)}, dropped_out_of_range={info['dropped_out_of_range']}, "
-                    f"dropped_duplicate={info['dropped_duplicate']}. Retrying..."
-                )
+                return normalized_pages
+            except Exception as e:
+                if attempt < max_attempts and self._is_retryable_generation_error(e):
+                    sleep_sec = min(4.0, 0.8 * (2 ** (attempt - 1)))
+                    logger.warning(
+                        "Transient OCR error for pages %s-%s; retrying in %.1fs (attempt %s/%s): %s",
+                        start_page_offset,
+                        start_page_offset + expected_count - 1,
+                        sleep_sec,
+                        attempt,
+                        max_attempts,
+                        e,
+                    )
+                    time.sleep(sleep_sec)
+                    continue
 
-            if len(pages) != expected_count or info["used_fallback_sequential"]:
-                logger.warning(
-                    "OCR normalization applied for pages %s+: raw=%s expected=%s "
-                    "dropped_out_of_range=%s dropped_duplicate=%s fallback_sequential=%s",
+                logger.error(
+                    "OCR attempt failed for pages %s-%s (attempt %s/%s): %s. Raw: %s...",
                     start_page_offset,
-                    len(pages),
-                    expected_count,
-                    info["dropped_out_of_range"],
-                    info["dropped_duplicate"],
-                    info["used_fallback_sequential"],
+                    start_page_offset + expected_count - 1,
+                    attempt,
+                    max_attempts,
+                    e,
+                    text[:100],
                 )
+                if attempt >= max_attempts:
+                    logger.error(
+                        "OCR exhausted retries for pages %s-%s after %s attempts.",
+                        start_page_offset,
+                        start_page_offset + expected_count - 1,
+                        max_attempts,
+                    )
+                raise
 
-            return normalized_pages
-        except Exception as e:
-            logger.error(f"Failed to parse Gemini response or incomplete batch: {e}. Raw: {text[:100]}...")
-            raise
+        raise RuntimeError(f"OCR failed after max attempts for pages {start_page_offset}+")
 
     def _chunk_text(self, pages_data: List[Dict]) -> List[Dict]:
         logger.info("Step 4: Chunking...")
@@ -733,13 +1086,98 @@ class IngestPipeline:
 
     def _save_chunks(self, chunks: List[Dict]):
         logger.info(f"Step 6: Saving {len(chunks)} chunks to Supabase...")
-        
-        # Bulk insert in batches of 100 ? Supabase-py handles lists.
-        # But for huge lists, batching is safer.
+
         batch_size = 100
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
             self.supabase.table("chunks").insert(batch).execute()
+
+    def _extract_learning_objects(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract textbook objects with stricter, problem-centric rules.
+
+        Goals:
+        - Avoid ToC/preface false positives (e.g., "연습문제" mentioned in prose)
+        - Require number-bearing labels for problem objects
+        - Deduplicate repeated OCR chunks (same label + page)
+        """
+        objects: List[Dict[str, Any]] = []
+        seen_keys = set()
+
+        # Noise sections frequently matching keywords but not actual problems.
+        noise_pattern = re.compile(r"(차례|contents|머리말|preface|감사의\s*글|역자\s*서문)", re.IGNORECASE)
+
+        # NOTE: order matters. first match wins.
+        patterns = [
+            # Problem-centric (number required)
+            ("assessment", re.compile(r"(학습\s*평가\s*[A-Z]?\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("example", re.compile(r"(응용예제\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("example", re.compile(r"(설계예제\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("example", re.compile(r"(예\s*제\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("example", re.compile(r"(example\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("exercise", re.compile(r"(연습\s*문제\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            ("exercise", re.compile(r"(exercise\s*\d+(?:[\.-]\d+)?)", re.IGNORECASE)),
+            # Non-problem companion objects (kept for future ranking/context)
+            ("strategy", re.compile(r"(문제\s*풀이\s*전략|풀이\s*전략|힌트)", re.IGNORECASE)),
+            ("summary", re.compile(r"(요약|핵심\s*정리|summary)", re.IGNORECASE)),
+        ]
+
+        for chunk in chunks:
+            text = (chunk.get("content_text") or "").strip()
+            if not text:
+                continue
+
+            page_start = chunk.get("page_start")
+
+            # Skip front matter where false positives are very common.
+            if isinstance(page_start, int) and page_start < 20:
+                continue
+            if noise_pattern.search(text):
+                continue
+
+            for obj_type, pattern in patterns:
+                m = pattern.search(text)
+                if not m:
+                    continue
+
+                label = m.group(1).strip()[:80]
+                label_norm = re.sub(r"\s+", "", label).lower()
+                dedup_key = (label_norm, page_start)
+                if dedup_key in seen_keys:
+                    break
+                seen_keys.add(dedup_key)
+
+                snippet = text[:260]
+                objects.append({
+                    "source_id": self.source_id,
+                    "chunk_id": chunk.get("chunk_id"),
+                    "object_type": obj_type,
+                    "label": label,
+                    "title": label,
+                    "snippet": snippet,
+                    "page_start": page_start,
+                    "page_end": chunk.get("page_end"),
+                    "anchor_path": chunk.get("anchor_path"),
+                })
+                break
+
+        return objects
+
+    def _save_learning_objects(self, chunks: List[Dict[str, Any]]):
+        objects = self._extract_learning_objects(chunks)
+        try:
+            # Idempotent-by-source behavior: avoid piling duplicates across re-ingest runs.
+            self.supabase.table("textbook_objects").delete().eq("source_id", self.source_id).execute()
+
+            if not objects:
+                logger.info("No textbook learning objects extracted (existing rows cleared).")
+                return
+
+            batch_size = 200
+            for i in range(0, len(objects), batch_size):
+                self.supabase.table("textbook_objects").insert(objects[i:i+batch_size]).execute()
+            logger.info(f"Saved {len(objects)} textbook learning objects.")
+        except Exception as e:
+            logger.warning(f"textbook_objects save skipped/failure: {e}")
 
     def _cleanup(self):
         if os.path.exists(self.local_pdf_path):

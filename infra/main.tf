@@ -69,11 +69,31 @@ resource "google_cloud_run_v2_job" "default" {
         }
         env {
             name = "INGEST_BATCH_PAGES"
-            value = "5"
+            value = "1"
         }
         env {
             name = "EMBED_BATCH_SIZE"
             value = "8"
+        }
+        env {
+            name = "PHASE1_SCANNED_MAX_WORKERS"
+            value = "1000"
+        }
+        env {
+            name = "PHASE1_API_MAX_CONCURRENCY"
+            value = "1000"
+        }
+        env {
+            name = "PHASE1_BATCH_MAX_INFLIGHT_JOBS"
+            value = "1000"
+        }
+        env {
+            name = "PHASE1_OCR_MAX_ATTEMPTS"
+            value = "2"
+        }
+        env {
+            name = "PHASE1_PER_PAGE_ALLOW_EMPTY_FILL"
+            value = "true"
         }
       }
     }

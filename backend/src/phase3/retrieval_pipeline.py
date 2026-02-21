@@ -130,7 +130,10 @@ class RetrievalPipeline:
                 response = client.models.embed_content(
                     model=Config.EMBEDDING_MODEL_NAME,
                     contents=batch,
-                    config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_QUERY",
+                        output_dimensionality=Config.EMBEDDING_DIMENSIONS,
+                    ),
                 )
                 embeddings = list(getattr(response, "embeddings", None) or [])
                 if len(embeddings) != len(batch):

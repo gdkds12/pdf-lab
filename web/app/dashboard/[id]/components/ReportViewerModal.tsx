@@ -26,12 +26,14 @@ type ReferenceRef = {
   source_id?: string | null
   page_start?: number | null
   page_end?: number | null
+  page_type?: string | null
   anchor_path?: string[] | null
 }
 
 type QueueItem = {
   rank?: number
   title: string
+  problem_id?: string | null
   why: string
   study_action: string
   importance: number
@@ -59,10 +61,11 @@ function formatSecRange(t0: number, t1: number) {
 
 function formatReference(ref: ReferenceRef) {
   if (typeof ref.page_start === 'number') {
+    const prefix = ref.page_type === 'pdf_page' ? 'PDF p.' : 'p.'
     if (typeof ref.page_end === 'number' && ref.page_end !== ref.page_start) {
-      return `p.${ref.page_start}-${ref.page_end}`
+      return `${prefix}${ref.page_start}-${ref.page_end}`
     }
-    return `p.${ref.page_start}`
+    return `${prefix}${ref.page_start}`
   }
 
   if (Array.isArray(ref.anchor_path) && ref.anchor_path.length > 0) {
@@ -119,7 +122,18 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
     fetchReport()
   }, [isOpen, sessionId])
 
-  const warnings = report?.warnings ?? []
+  const rawWarnings = report?.warnings ?? []
+  const warnings = rawWarnings.filter((w) => {
+    if (!w) return false
+    // Reduce noisy validation internals in UI
+    return !(
+      w.startsWith('추천 항목: title/why 누락') ||
+      w.startsWith('검증 제외 항목:') ||
+      w.startsWith('검증 제외 사유:') ||
+      w.startsWith('검증 제외 예시:')
+    )
+  })
+  const hasNoSignalWarning = rawWarnings.some((w) => w.includes('신호(signals)가 없어'))
   const confirmedQueue = report?.recommendation_queue_confirmed ?? []
   const candidateQueue = report?.recommendation_queue_candidates ?? []
   const queue = report?.recommendation_queue ?? []
@@ -167,7 +181,9 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
 
                 {(hasSplitQueues ? (confirmedQueue.length + candidateQueue.length) : queue.length) === 0 ? (
                   <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-foreground/70">
-                    생성된 추천 항목이 없습니다. 오디오 파일을 더 추가한 뒤 다시 리포트를 생성해 주세요.
+                    {hasNoSignalWarning
+                      ? '이 세션은 추출된 신호가 없어 추천을 생성하지 못했습니다. 해당 오디오 파일의 인식 상태를 먼저 확인해 주세요.'
+                      : '생성된 추천 항목이 없습니다. 오디오 파일을 더 추가한 뒤 다시 리포트를 생성해 주세요.'}
                   </div>
                 ) : (
                   <div className="space-y-5">
@@ -192,6 +208,9 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                           </span>
                         </div>
 
+                        {item.problem_id ? (
+                          <p className="mt-1 text-xs font-semibold text-primary">추천 문제: {item.problem_id}</p>
+                        ) : null}
                         <p className="text-sm leading-relaxed text-foreground/80">{item.why}</p>
                         <p className="mt-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs text-primary-foreground">
                           학습 액션: {item.study_action}
@@ -243,6 +262,7 @@ export default function ReportViewerModal({ isOpen, onClose, sessionId, title }:
                           <article key={`candidate-${item.title}-${idx}`} className="rounded-xl border border-white/10 bg-white/5 p-4">
                             <p className="text-xs font-semibold text-primary">후보 {item.rank ?? idx + 1} · 중요도 {item.importance_score}점</p>
                             <h5 className="mt-1 text-sm font-semibold text-foreground">{item.title}</h5>
+                            {item.problem_id ? <p className="mt-1 text-xs text-primary/90">추천 문제: {item.problem_id}</p> : null}
                             <p className="mt-1 text-xs text-foreground/75">{item.why}</p>
                           </article>
                         ))}

@@ -22,7 +22,13 @@ class Config:
     GEMINI_API_KEY_SECONDARY = os.getenv("GEMINI_API_KEY_SECONDARY")
     # Optional comma-separated key list for multi-project quota sharding.
     GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
-    REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-3-pro-preview")
+    REASONING_MODEL_NAME = os.getenv("REASONING_MODEL_NAME", "gemini-2.5-flash")
+    REASONING_THINKING_BUDGET = int(os.getenv("REASONING_THINKING_BUDGET", "1024"))
+    REASONING_MAX_OUTPUT_TOKENS = int(os.getenv("REASONING_MAX_OUTPUT_TOKENS", "1200"))
+    PHASE4_COST_BUDGET_KRW = float(os.getenv("PHASE4_COST_BUDGET_KRW", "1000"))
+    # Rough price model (KRW / 1M tokens) for budget guard. Tune via env as pricing changes.
+    REASONING_INPUT_KRW_PER_1M = float(os.getenv("REASONING_INPUT_KRW_PER_1M", "400"))
+    REASONING_OUTPUT_KRW_PER_1M = float(os.getenv("REASONING_OUTPUT_KRW_PER_1M", "2400"))
 
     # Vertex AI Location Override (Separate from GCP_LOCATION sometimes needed)
     VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
@@ -32,15 +38,26 @@ class Config:
     # Pipeline Settings
     INGEST_BATCH_PAGES = int(os.getenv("INGEST_BATCH_PAGES", "20"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "16"))
-    PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "16"))
+    PHASE1_SCANNED_MAX_WORKERS = int(os.getenv("PHASE1_SCANNED_MAX_WORKERS", "1000"))
+    PHASE1_API_MAX_CONCURRENCY = int(os.getenv("PHASE1_API_MAX_CONCURRENCY", "1000"))
+    PHASE1_EFFECTIVE_MAX_WORKERS = int(os.getenv("PHASE1_EFFECTIVE_MAX_WORKERS", "256"))
     PHASE1_OCR_TIMEOUT_SEC = int(os.getenv("PHASE1_OCR_TIMEOUT_SEC", "90"))
+    # 1 initial call + up to 3 retries (default 4 attempts total)
+    PHASE1_OCR_MAX_ATTEMPTS = int(os.getenv("PHASE1_OCR_MAX_ATTEMPTS", "4"))
     PHASE1_PARTIAL_FILL_ENABLED = os.getenv("PHASE1_PARTIAL_FILL_ENABLED", "true").lower() in ("1", "true", "yes")
     PHASE1_PARTIAL_FILL_MIN_PAGES = int(os.getenv("PHASE1_PARTIAL_FILL_MIN_PAGES", "3"))
+    PHASE1_PER_PAGE_ALLOW_EMPTY_FILL = os.getenv("PHASE1_PER_PAGE_ALLOW_EMPTY_FILL", "true").lower() in ("1", "true", "yes")
+    PHASE1_STRAGGLER_HEDGE_ENABLED = os.getenv("PHASE1_STRAGGLER_HEDGE_ENABLED", "true").lower() in ("1", "true", "yes")
+    PHASE1_STRAGGLER_HEDGE_SEC = float(os.getenv("PHASE1_STRAGGLER_HEDGE_SEC", "45"))
+    PHASE1_STRAGGLER_HEDGE_REMAINING_THRESHOLD = int(os.getenv("PHASE1_STRAGGLER_HEDGE_REMAINING_THRESHOLD", "64"))
+    PHASE1_STRAGGLER_MAX_HEDGES_PER_PAGE = int(os.getenv("PHASE1_STRAGGLER_MAX_HEDGES_PER_PAGE", "1"))
     PHASE1_ADAPTIVE_SPLIT_ON_FAILURE = os.getenv("PHASE1_ADAPTIVE_SPLIT_ON_FAILURE", "true").lower() in ("1", "true", "yes")
     PHASE1_ADAPTIVE_MIN_BATCH_PAGES = int(os.getenv("PHASE1_ADAPTIVE_MIN_BATCH_PAGES", "5"))
     PHASE1_USE_BATCH_API = os.getenv("PHASE1_USE_BATCH_API", "false").lower() in ("1", "true", "yes")
     PHASE1_BATCH_REQUESTS_PER_JOB = int(os.getenv("PHASE1_BATCH_REQUESTS_PER_JOB", "10"))
-    PHASE1_BATCH_MAX_INFLIGHT_JOBS = int(os.getenv("PHASE1_BATCH_MAX_INFLIGHT_JOBS", "3"))
+    PHASE1_BATCH_MAX_INFLIGHT_JOBS = int(os.getenv("PHASE1_BATCH_MAX_INFLIGHT_JOBS", "1000"))
+    # Limit concurrent PDF slicing/materialization to reduce peak memory.
+    PHASE1_SLICE_MAX_INFLIGHT = int(os.getenv("PHASE1_SLICE_MAX_INFLIGHT", "8"))
     PHASE3_MAX_WORKERS = int(os.getenv("PHASE3_MAX_WORKERS", "8"))
     PHASE2_MAX_WORKERS = int(os.getenv("PHASE2_MAX_WORKERS", "12"))
     PHASE2_USE_BATCH_API = os.getenv("PHASE2_USE_BATCH_API", "false").lower() in ("1", "true", "yes")
@@ -63,6 +80,14 @@ class Config:
     PHASE4_MAX_CITATIONS = int(os.getenv("PHASE4_MAX_CITATIONS", "5"))
     PHASE4_MAX_QUEUE_ITEMS = int(os.getenv("PHASE4_MAX_QUEUE_ITEMS", "20"))
     PHASE4_STRICT_SCHEMA = os.getenv("PHASE4_STRICT_SCHEMA", "true").lower() in ("1", "true", "yes")
+    PHASE4_REASONING_MAX_ATTEMPTS = int(os.getenv("PHASE4_REASONING_MAX_ATTEMPTS", "3"))
+    PHASE4_REASONING_RETRY_BASE_SEC = float(os.getenv("PHASE4_REASONING_RETRY_BASE_SEC", "2.0"))
+    PHASE4_V2_ENABLED = os.getenv("PHASE4_V2_ENABLED", "true").lower() in ("1", "true", "yes")
+    PHASE4_V2_MAX_CHUNKS = int(os.getenv("PHASE4_V2_MAX_CHUNKS", "120"))
+    PHASE4_V2_MAX_CHARS_PER_CHUNK = int(os.getenv("PHASE4_V2_MAX_CHARS_PER_CHUNK", "1200"))
+    PHASE4_PAGE_SEARCH_RADIUS = int(os.getenv("PHASE4_PAGE_SEARCH_RADIUS", "4"))
+    PHASE4_PAGE_SEARCH_MAX_PER_SIGNAL = int(os.getenv("PHASE4_PAGE_SEARCH_MAX_PER_SIGNAL", "8"))
+    PHASE4_MIN_RECOMMENDATIONS = int(os.getenv("PHASE4_MIN_RECOMMENDATIONS", "10"))
     
     @classmethod
     def validate(cls):
